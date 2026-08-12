@@ -1,0 +1,18 @@
+# Perfil de Chrome (contiene tu sesion / cookies - NUNCA subir)
+chrome_profile/
+
+# Resultados de las extracciones (contienen datos personales)
+drivers_meli_*.txt
+drivers_meli_*.csv
+*.xlsx
+
+# Build de PyInstaller (el .exe final SI se sube)
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
