@@ -81,12 +81,17 @@ def crear_driver():
 
 
 def pedir(driver, url):
-    """GET desde la propia pagina, reusando la sesion."""
+    """GET desde la propia pagina, reusando la sesion.
+
+    OJO: se devuelve el cuerpo COMPLETO. Recortarlo aqui partia el JSON a la
+    mitad y json.loads fallaba con "Unterminated string". El recorte se hace
+    al imprimir, no antes de parsear.
+    """
     script = """
     const url = arguments[0];
     const done = arguments[arguments.length - 1];
     fetch(url, {credentials:'include', headers:{'Accept':'application/json'}})
-      .then(r => r.text().then(t => done({status: r.status, body: t.slice(0, 4000)})))
+      .then(r => r.text().then(t => done({status: r.status, body: t})))
       .catch(e => done({status: 0, body: String(e)}));
     """
     driver.set_script_timeout(30)
@@ -106,6 +111,75 @@ def campos_interesantes(obj, prefijo=""):
     elif isinstance(obj, list) and obj:
         hallados.update(campos_interesantes(obj[0], f"{prefijo}[0]"))
     return hallados
+
+
+def leer_urls_del_log(driver):
+    """Devuelve las URLs de tipo XHR/Fetch vistas desde la ultima lectura."""
+    urls = {}
+    try:
+        entradas = driver.get_log("performance")
+    except Exception:
+        return []
+
+    for entrada in entradas:
+        try:
+            mensaje = json.loads(entrada["message"])["message"]
+        except Exception:
+            continue
+        if mensaje.get("method") != "Network.requestWillBeSent":
+            continue
+        params = mensaje.get("params", {})
+        url = (params.get("request") or {}).get("url", "")
+        tipo = params.get("type", "")
+        if not url.startswith("http"):
+            continue
+        if tipo not in ("XHR", "Fetch"):
+            continue
+        if any(b in url.lower() for b in (".js", ".css", "/metrics", "melidata")):
+            continue
+        urls[url] = True
+    return list(urls)
+
+
+def espiar_perfil(driver, id_prueba):
+    """Abre la ficha real del driver y observa que peticiones dispara.
+
+    Mas confiable que adivinar rutas: si la pantalla muestra el telefono,
+    alguna de estas peticiones tuvo que traerlo.
+    """
+    url_perfil = (
+        "https://envios.adminml.com/logistics/provider-management/drivers/edit/"
+        f"{id_prueba}"
+    )
+
+    leer_urls_del_log(driver)          # vaciar el log
+    log(f"Abriendo la ficha de prueba: /drivers/edit/{id_prueba}")
+    driver.get(url_perfil)
+    time.sleep(6)                      # dejar que cargue todo
+
+    urls = leer_urls_del_log(driver)
+    log(f"Peticiones XHR/Fetch observadas: {len(urls)}")
+
+    hallazgos = []
+    for url in urls:
+        try:
+            resp = pedir(driver, url)
+        except Exception:
+            continue
+        if resp.get("status") != 200:
+            continue
+        try:
+            obj = json.loads(resp.get("body") or "")
+        except json.JSONDecodeError:
+            continue
+        campos = campos_interesantes(obj)
+        marca = "  <-- TIENE CONTACTO" if campos else ""
+        print(f"    {url[:88]}{marca}")
+        if campos:
+            hallazgos.append((url, obj, campos))
+        time.sleep(0.2)
+
+    return hallazgos
 
 
 def main():
@@ -144,12 +218,34 @@ def main():
             f"{BASE_API}/drivers/drivers-and-invites"
             "?status=active&paginated=true",
         )
+        cuerpo = r.get("body") or ""
+        if r.get("status") != 200:
+            log(f"El listado respondio {r.get('status')}.")
+            log(f"Empieza con: {cuerpo[:150]}")
+            log("Si es 401/403, la sesion caduco: inicia sesion de nuevo.")
+            input(">>> ENTER para cerrar... ")
+            return
+
         try:
-            datos = json.loads(r["body"])
-            ejemplo = (datos.get("result") or [])[0]
-            id_prueba = ejemplo.get("id")
-        except Exception as e:
-            log(f"No se pudo obtener un ID de ejemplo: {e}")
+            datos = json.loads(cuerpo)
+        except json.JSONDecodeError as e:
+            log(f"El listado no devolvio JSON valido: {e}")
+            log(f"Longitud recibida: {len(cuerpo)} caracteres")
+            log(f"Empieza con: {cuerpo[:150]}")
+            input(">>> ENTER para cerrar... ")
+            return
+
+        resultados = datos.get("result") or datos.get("results") or []
+        if not resultados:
+            log("El listado respondio, pero sin registros.")
+            log(f"Claves recibidas: {list(datos.keys())}")
+            input(">>> ENTER para cerrar... ")
+            return
+
+        ejemplo = resultados[0]
+        id_prueba = ejemplo.get("id")
+        if not id_prueba:
+            log(f"El primer registro no trae 'id'. Claves: {list(ejemplo.keys())}")
             input(">>> ENTER para cerrar... ")
             return
 
@@ -191,7 +287,15 @@ def main():
             exitosas.append((ruta, obj, hallados))
             time.sleep(0.3)
 
-        # 3) Reporte
+        # 3) Si adivinar no funciono, ESPIAR: abrir el perfil real y ver que pide
+        if not any(e[2] for e in exitosas):
+            print()
+            log("Ninguna ruta adivinada trajo contacto. Vamos a espiar el perfil real...")
+            espiadas = espiar_perfil(driver, id_prueba)
+            for url, obj, hallados in espiadas:
+                exitosas.append((url.replace(BASE_API, ""), obj, hallados))
+
+        # 4) Reporte
         print()
         print("=" * 70)
         con_contacto = [e for e in exitosas if e[2]]
@@ -199,7 +303,8 @@ def main():
         if con_contacto:
             ruta, obj, hallados = con_contacto[0]
             print("  ENCONTRADA una API de perfil con datos de contacto:")
-            print(f"    {BASE_API}{ruta}")
+            completa = ruta if ruta.startswith("http") else BASE_API + ruta
+            print(f"    {completa}")
             print()
             print("  Campos de contacto:")
             for k, v in hallados.items():
