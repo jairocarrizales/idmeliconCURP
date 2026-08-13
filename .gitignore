@@ -9,6 +9,10 @@ drivers_meli_*.csv
 # Reportes del descubridor de API (la muestra puede traer datos reales)
 api_encontrada_*.txt
 
+# Diagnosticos de arranque de la interfaz
+error_arranque.txt
+arranque.log
+
 # Build de PyInstaller (el .exe final SI se sube)
 build/
 dist/

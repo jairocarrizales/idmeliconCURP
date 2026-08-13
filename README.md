@@ -14,7 +14,8 @@ drivers **activos** como de los **bloqueados**. Opcionalmente también
 
 | Ejecutable | Qué hace | Tiempo |
 |---|---|---|
-| **`ExtraerDriversAPI.exe`** ⭐ | Consulta directo la API de la tabla. Trae ID, nombre, CURP y estatus. **Empieza por este.** | segundos |
+| **`DriversMeli.exe`** ⭐ | **Interfaz gráfica.** Todo con botones, sin terminal. **Empieza por este.** | segundos |
+| `ExtraerDriversAPI.exe` | La misma extracción, en consola. | segundos |
 | `ExtraerDriversMeli.exe` | Lee el HTML presionando "Mostrar más". Respaldo si la API cambia. | minutos |
 | `DescubrirAPI.exe` | Diagnóstico: encuentra el endpoint si MELI lo mueve. | ~1 min |
 | `ProbarPerfilAPI.exe` | Diagnóstico: busca una API de perfil que traiga teléfono/e-mail. | ~1 min |
@@ -39,7 +40,32 @@ bloqueados solo rescataba el estatus.
 
 ---
 
-## Uso rápido (versión API)
+## Uso rápido (interfaz gráfica)
+
+Ejecuta **`DriversMeli.exe`** y sigue los botones numerados:
+
+| Botón | Qué hace |
+|---|---|
+| **1 · Abrir Mercado Libre** | Lanza Chrome en la página de drivers |
+| **2 · Ya inicié sesión, extraer** | Trae los ~2,000 drivers en segundos |
+| **3 · Traer teléfonos** | Opcional: consulta las fichas (~2 min) |
+| **Guardar resultado** | Escribe el TXT y el CSV, y ofrece abrir la carpeta |
+
+Los botones se habilitan conforme avanzas, así que no hay forma de saltarse un
+paso. Las tarjetas muestran los totales por estatus y el registro de actividad
+queda a la vista dentro de la ventana.
+
+**Por qué existe esta versión:** en la de consola había que presionar ENTER
+varias veces para que la terminal reaccionara — cuando el foco está en Chrome,
+Windows se traga las primeras pulsaciones. Un clic no tiene ese problema.
+
+La extracción corre en un hilo aparte, así que la ventana nunca se congela.
+Al terminar el listado se guarda un respaldo automático, antes de que decidas
+si traer los teléfonos.
+
+---
+
+## Uso de la versión de consola
 
 1. Ejecuta **`ExtraerDriversAPI.exe`** (doble clic).
 2. Inicia sesión en la ventana de Chrome.
