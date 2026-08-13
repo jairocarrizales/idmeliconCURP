@@ -48,7 +48,30 @@ def log(msg):
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
+def limpiar_lock():
+    """Borra los archivos de bloqueo que dejan a Chrome sin poder abrir el perfil.
+
+    Si el programa se cierra a la fuerza (o se mata el proceso), queda un
+    'lockfile' que hace que Chrome arranque en blanco la proxima vez.
+    """
+    if not os.path.isdir(PROFILE_DIR):
+        return
+    for nombre in ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
+        for ruta in (
+            os.path.join(PROFILE_DIR, nombre),
+            os.path.join(PROFILE_DIR, "Default", nombre),
+        ):
+            try:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+                    log(f"Se libero el bloqueo del perfil ({nombre}).")
+            except Exception:
+                # Si no se puede borrar es porque Chrome lo tiene abierto de verdad
+                pass
+
+
 def crear_driver():
+    limpiar_lock()
     opts = Options()
     opts.add_argument(f"--user-data-dir={PROFILE_DIR}")
     opts.add_argument("--profile-directory=Default")
@@ -63,7 +86,39 @@ def crear_driver():
     opts.add_experimental_option(
         "perfLoggingPrefs", {"enableNetwork": True, "enablePage": False}
     )
-    return webdriver.Chrome(options=opts)
+
+    try:
+        return webdriver.Chrome(options=opts)
+    except Exception as e:
+        texto = str(e)
+        if "user data directory is already in use" in texto.lower():
+            log("ERROR: el perfil esta en uso por otro Chrome.")
+            log("Cierra TODAS las ventanas de Chrome abiertas por este programa")
+            log("y vuelve a intentarlo. Si el problema sigue, borra la carpeta:")
+            log(f"  {PROFILE_DIR}")
+            log("(Solo perderas la sesion guardada; habra que iniciar sesion otra vez.)")
+        raise
+
+
+def verificar_carga(driver):
+    """Avisa si la pagina quedo en blanco en lugar de dejar al usuario a ciegas."""
+    try:
+        url = driver.current_url or ""
+        cuerpo = driver.find_element(By.TAG_NAME, "body").text or ""
+    except Exception:
+        log("ADVERTENCIA: no se pudo leer la pagina.")
+        return False
+
+    if url in ("data:,", "about:blank", "") or len(cuerpo.strip()) < 20:
+        print()
+        log("ADVERTENCIA: la pagina se ve en blanco.")
+        log("Causas comunes:")
+        log("  - El perfil de Chrome quedo bloqueado (cierra todo Chrome y reintenta)")
+        log(f"  - Perfil danado: borra la carpeta {PROFILE_DIR}")
+        log("  - Sin conexion, o la sesion caduco (inicia sesion de nuevo)")
+        print()
+        return False
+    return True
 
 
 def leer_peticiones(driver):
@@ -194,6 +249,13 @@ def main():
         print("  3) Regresa aqui y presiona ENTER.")
         print("-" * 70)
         input("\n>>> ENTER cuando veas la lista... ")
+
+        if not verificar_carga(driver):
+            resp = input(">>> Reintentar cargar la pagina? (s/n): ").strip().lower()
+            if resp.startswith("s"):
+                driver.get(URL)
+                time.sleep(4)
+                input(">>> Inicia sesion si hace falta y presiona ENTER... ")
 
         if "provider-management/drivers" not in driver.current_url:
             driver.get(URL)

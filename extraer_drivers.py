@@ -68,7 +68,29 @@ def limpiar(texto):
     return " ".join(texto.split()).strip()
 
 
+def limpiar_lock():
+    """Borra los bloqueos que impiden a Chrome abrir el perfil.
+
+    Si el programa se cierra a la fuerza queda un 'lockfile' y la proxima vez
+    Chrome arranca en una pagina en blanco.
+    """
+    if not os.path.isdir(PROFILE_DIR):
+        return
+    for nombre in ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
+        for ruta in (
+            os.path.join(PROFILE_DIR, nombre),
+            os.path.join(PROFILE_DIR, "Default", nombre),
+        ):
+            try:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+                    log(f"Se libero el bloqueo del perfil ({nombre}).")
+            except Exception:
+                pass
+
+
 def crear_driver():
+    limpiar_lock()
     opts = Options()
     opts.add_argument(f"--user-data-dir={PROFILE_DIR}")
     opts.add_argument("--profile-directory=Default")
@@ -77,7 +99,15 @@ def crear_driver():
     opts.add_argument("--lang=es-MX")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
-    return webdriver.Chrome(options=opts)
+
+    try:
+        return webdriver.Chrome(options=opts)
+    except Exception as e:
+        if "user data directory is already in use" in str(e).lower():
+            log("ERROR: el perfil de Chrome esta en uso por otra ventana.")
+            log("Cierra las ventanas de Chrome abiertas por este programa y reintenta.")
+            log(f"Si el problema sigue, borra la carpeta: {PROFILE_DIR}")
+        raise
 
 
 def contar_filas(driver):
