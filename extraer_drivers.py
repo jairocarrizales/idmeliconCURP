@@ -68,23 +68,74 @@ def limpiar(texto):
     return " ".join(texto.split()).strip()
 
 
-def limpiar_lock():
-    """Borra los bloqueos que impiden a Chrome abrir el perfil.
+def cerrar_chrome_huerfano():
+    """Cierra los Chrome que quedaron usando NUESTRO perfil.
 
-    Si el programa se cierra a la fuerza queda un 'lockfile' y la proxima vez
-    Chrome arranca en una pagina en blanco.
+    Si el programa termina a la fuerza, sus procesos de Chrome siguen vivos
+    agarrados al perfil. En el siguiente arranque Chrome no puede abrirlo y
+    muestra una ventana en blanco. Se identifican por la ruta del perfil en
+    su linea de comando, asi que el Chrome personal del usuario NO se toca.
+    """
+    if os.name != "nt":
+        return 0
+
+    # Se compara solo el nombre de la carpeta del perfil: la ruta completa
+    # trae backslashes que PowerShell interpreta como escapes en -like.
+    marca = os.path.basename(PROFILE_DIR)          # "chrome_profile"
+    proyecto = os.path.basename(os.path.dirname(PROFILE_DIR))  # "meliusuarios"
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like '*{proyecto}*' -and "
+        f"$_.CommandLine -like '*{marca}*' }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+        "-ErrorAction SilentlyContinue; $_.ProcessId }"
+    )
+    try:
+        import subprocess
+
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        cerrados = [l for l in (res.stdout or "").split() if l.strip().isdigit()]
+        if cerrados:
+            log(f"Se cerraron {len(cerrados)} procesos de Chrome del programa anterior.")
+            time.sleep(2)
+        return len(cerrados)
+    except Exception:
+        return 0
+
+
+def limpiar_lock():
+    """Libera el perfil si quedo bloqueado por un cierre a la fuerza.
+
+    Primero se cierran los Chrome huerfanos: borrar el lockfile con procesos
+    vivos no sirve de nada, porque lo vuelven a crear.
     """
     if not os.path.isdir(PROFILE_DIR):
         return
-    for nombre in ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
-        for ruta in (
-            os.path.join(PROFILE_DIR, nombre),
-            os.path.join(PROFILE_DIR, "Default", nombre),
-        ):
+
+    cerrar_chrome_huerfano()
+
+    # 'LOCK' (dentro de Default) es el que suele quedar y provoca el crash
+    # "DevToolsActivePort file doesn't exist".
+    bloqueos = (
+        "lockfile",
+        "LOCK",
+        "SingletonLock",
+        "SingletonCookie",
+        "SingletonSocket",
+        "DevToolsActivePort",
+    )
+    for nombre in bloqueos:
+        for carpeta in (PROFILE_DIR, os.path.join(PROFILE_DIR, "Default")):
+            ruta = os.path.join(carpeta, nombre)
             try:
                 if os.path.exists(ruta):
                     os.remove(ruta)
-                    log(f"Se libero el bloqueo del perfil ({nombre}).")
             except Exception:
                 pass
 
