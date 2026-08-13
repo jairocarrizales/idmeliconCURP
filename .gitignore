@@ -8,6 +8,17 @@ drivers_meli_*.csv
 
 # Reportes del descubridor de API (la muestra puede traer datos reales)
 api_encontrada_*.txt
+api_billing_*.txt
+sonda_*.txt
+items_billing_*.txt
+descargas_*.txt
+post_descarga_*.txt
+prueba_endpoints_*.txt
+
+# Prefacturas y reportes de operacion: traen nombres, CURP y montos
+billing/
+billing_*.txt
+billing_*.csv
 
 # Diagnosticos de arranque de la interfaz
 error_arranque.txt

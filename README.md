@@ -17,6 +17,7 @@ drivers **activos** como de los **bloqueados**. Opcionalmente también
 | **`DriversMeli.exe`** ⭐ | **Interfaz gráfica.** Todo con botones, sin terminal. **Empieza por este.** | segundos |
 | `ExtraerDriversAPI.exe` | La misma extracción, en consola. | segundos |
 | `ExtraerDriversMeli.exe` | Lee el HTML presionando "Mostrar más". Respaldo si la API cambia. | minutos |
+| **`PrefacturasMeli.exe`** ⭐ | **Prefacturas con el ID del conductor.** Cruza por número de ruta, no por nombre. | ~1 min |
 | `DescubrirAPI.exe` | Diagnóstico: encuentra el endpoint si MELI lo mueve. | ~1 min |
 | `ProbarPerfilAPI.exe` | Diagnóstico: busca una API de perfil que traiga teléfono/e-mail. | ~1 min |
 
@@ -499,6 +500,85 @@ está abierto: ciérralo antes de recompilar.
 | `extraer_drivers.py` | Extractor por HTML — respaldo |
 | `descubrir_api.py` | Detector del endpoint |
 | `EXTRAER_DRIVERS.bat` | Lanzador de la versión HTML |
+
+---
+
+## `PrefacturasMeli.exe` — el ID del conductor en la prefactura
+
+### El problema
+
+El CSV que descarga el panel de facturación trae el **nombre** del conductor,
+no su ID:
+
+```
+Descripción;ID de ruta;Fecha inicio;...;Patente;Conductor;Cantidad;Precio
+Car MLP - SVC: SGD1...;147326006;11/07/2026;...;JSV7831;Victor Aparicio;1;1585.00
+```
+
+Cruzar por nombre no basta: en el padrón hay **25 nombres repetidos**
+(dos personas distintas llamadas "Jesus Silva"). Sin ID no se sabe a cuál
+corresponde el pago.
+
+### La solución: cruzar por número de ruta
+
+MELI expone dos endpoints que, juntos, dan el ID oficial:
+
+```
+POST /logistics/billing/api/pre-invoices/<id>/reports/details
+     Content-Type: application/json
+     {"tolls_items":null}
+     → items[].details[] con external_route_id y driver_name
+
+GET  /api/carriers/reports?mile=LM&init_date=…&end_date=…&report_type=carrier
+     → XLSX con "Id de la ruta" + "Id del transportista"
+```
+
+La cadena queda **toda por número**:
+
+```
+prefactura (ruta 147326006)
+   ↓ el reporte dice quién hizo esa ruta
+ID usuario 4965727
+   ↓ el padrón sabe quién es
+nombre, CURP, teléfono, estatus
+```
+
+Verificado con datos reales: `ruta 151225069 → id 4965727 → Miguel Angel Cano
+→ CURP CARM0107…`, 50 de 50 rutas resolvieron ID y CURP.
+
+### Uso
+
+Ejecuta `PrefacturasMeli.exe`, presiona **1 · Abrir Mercado Libre**, inicia
+sesión, escribe el número de prefactura y presiona **2 · Extraer TODO**.
+
+El período se deduce solo: `202607Q1` → del 1 al 15 de julio, así que pide el
+reporte de operación del rango correcto sin que tú elijas fechas.
+
+**Requiere** un `drivers_meli_*.txt` en la carpeta para poder añadir la CURP —
+genéralo antes con `DriversMeli.exe`.
+
+### Columnas
+
+```
+ID ruta | ID usuario | Nombre | CURP | Estatus | Teléfono | E-mail |
+Placa | Concepto | Tipo | Fecha inicio | Fecha fin | Cantidad | Costo | Total
+```
+
+### Nota sobre el lector de XLSX
+
+El reporte de operación llega como XLSX binario. Se lee **sin openpyxl**,
+descomprimiendo el ZIP y parseando el XML a mano, para no añadir esa
+dependencia al ejecutable. Se verificó contra openpyxl con un archivo real:
+mismas 168 filas, mismas rutas.
+
+También hay que pedirlo en base64 — como texto se corrompe.
+
+### Sondas de diagnóstico
+
+Los archivos `descubrir_billing`, `sondear_*`, `ver_items` y `probar_endpoints`
+son las herramientas que llevaron a encontrar esos endpoints. Se conservan por
+si MELI cambia su API: aplican la misma técnica de espiar el tráfico descrita
+más arriba, apuntada a distintas pantallas.
 
 ---
 

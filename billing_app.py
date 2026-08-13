@@ -1,0 +1,538 @@
+# -*- coding: utf-8 -*-
+"""
+Extractor de Prefacturas con ID de conductor - Interfaz grafica
+
+Le das el numero de prefactura y hace todo:
+  1. Baja el detalle de la prefactura (trae el ID de ruta)
+  2. Baja el reporte de operacion del periodo (ruta -> ID de conductor)
+  3. Cruza por NUMERO de ruta, no por nombre
+  4. Le agrega CURP y telefono del padron
+"""
+
+import os
+import sys
+import time
+import traceback
+from datetime import datetime
+
+from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QUrl
+from PySide6.QtGui import QFont, QDesktopServices
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QPlainTextEdit, QFrame, QMessageBox, QGridLayout,
+    QSizePolicy, QLineEdit,
+)
+
+import extraer_billing as nucleo
+
+# ---------------------------------------------------------------- colores
+FONDO = "#1e2128"
+PANEL = "#272b34"
+BORDE = "#3a3f4b"
+TEXTO = "#e8eaed"
+SUAVE = "#9aa0aa"
+AMARILLO = "#ffe600"
+AZUL = "#3483fa"
+VERDE = "#00a650"
+ROJO = "#f23d4f"
+
+FUENTE = '"Segoe UI Semibold", "Segoe UI", Arial'
+FUENTE_NUM = '"Segoe UI Black", "Segoe UI", Impact, Arial'
+
+
+def barra_titulo_oscura(ventana):
+    """Pinta de oscuro la barra de titulo, que la dibuja Windows y no Qt."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(ventana.winId()))
+        dwm = ctypes.windll.dwmapi
+        activar = ctypes.c_int(1)
+        for atributo in (20, 19):
+            if dwm.DwmSetWindowAttribute(
+                hwnd, ctypes.c_uint(atributo),
+                ctypes.byref(activar), ctypes.sizeof(activar),
+            ) == 0:
+                break
+        r, g, b = (int(FONDO[i:i + 2], 16) for i in (1, 3, 5))
+        color = ctypes.c_uint((b << 16) | (g << 8) | r)
+        dwm.DwmSetWindowAttribute(
+            hwnd, ctypes.c_uint(35),
+            ctypes.byref(color), ctypes.sizeof(color),
+        )
+    except Exception:
+        pass
+
+
+def _carpeta_base():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+class Puente(QObject):
+    mensaje = Signal(str)
+    terminado = Signal(str, object)
+    fallo = Signal(str)
+
+
+class Ordenes(QObject):
+    """Señales para pedirle trabajo al hilo secundario."""
+
+    abrir = Signal()
+    extraer = Signal(str)
+    cerrar = Signal()
+
+
+class Trabajador(QObject):
+    """Hace el trabajo fuera del hilo de la interfaz, que si no se congela."""
+
+    def __init__(self, puente):
+        super().__init__()
+        self.puente = puente
+        self.driver = None
+
+    def log(self, t):
+        self.puente.mensaje.emit(t)
+
+    @Slot()
+    def abrir_navegador(self):
+        try:
+            self.log("Preparando Chrome...")
+            nucleo.log = self.log
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
+            self.driver = nucleo.crear_driver()
+            self.driver.get("https://envios.adminml.com/logistics/billing/invoices")
+            self.log("Chrome abierto. Inicia sesion en esa ventana.")
+            self.puente.terminado.emit("navegador", None)
+        except Exception as e:
+            self.puente.fallo.emit(self._explicar(e))
+
+    @Slot(str)
+    def extraer(self, id_pref):
+        try:
+            if not self.driver:
+                self.puente.fallo.emit("Primero hay que abrir Chrome.")
+                return
+
+            # Situarnos en la prefactura: el fetch corre dentro de la pagina
+            url = nucleo.WEB + id_pref
+            if id_pref not in (self.driver.current_url or ""):
+                self.log(f"Abriendo la prefactura {id_pref}...")
+                self.driver.get(url)
+                time.sleep(4)
+
+            padron, ruta_padron = nucleo.cargar_padron()
+            if padron:
+                self.log(f"Padron: {len(padron)} drivers "
+                         f"({os.path.basename(ruta_padron)})")
+            else:
+                self.log("AVISO: sin drivers_meli_*.txt, no habra CURP.")
+
+            # 1) Detalle
+            filas, periodo, _ = nucleo.bajar_detalle(self.driver, id_pref)
+            if not filas:
+                self.puente.fallo.emit(
+                    "La prefactura no trajo lineas de detalle.\n\n"
+                    "Revisa que el numero sea correcto y que la sesion "
+                    "siga activa."
+                )
+                return
+
+            # 2) Reporte del periodo
+            desde, hasta = nucleo.periodo_a_fechas(periodo)
+            if not desde:
+                self.puente.fallo.emit(
+                    f"No se entendio el periodo '{periodo}'.\n\n"
+                    "Se esperaba algo como 202607Q1."
+                )
+                return
+
+            mapa = {}
+            try:
+                mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
+            except Exception as e:
+                self.log(f"No se pudo traer el reporte: {str(e)[:120]}")
+                self.log("Se continua sin ID de usuario.")
+
+            # 3) Cruce por numero de ruta
+            self.log("Cruzando por ID de ruta...")
+            con_id = sin_ruta = sin_mapa = 0
+            for f in filas:
+                ruta = f.get("ruta", "")
+                if not ruta:
+                    sin_ruta += 1
+                    continue
+                info = mapa.get(ruta)
+                if not info:
+                    sin_mapa += 1
+                    continue
+                f["id_usuario"] = info["id"]
+                con_id += 1
+                datos = padron.get(info["id"])
+                if datos:
+                    f["nombre"] = datos["nombre"]
+                    f["curp"] = datos["curp"]
+                    f["estatus"] = datos["estatus"]
+                    f["telefono"] = datos["telefono"]
+                    f["email"] = datos["email"]
+                else:
+                    f["nombre"] = info["nombre"]
+
+            rutas = nucleo.guardar(filas, id_pref)
+            self.log(f"Guardado: {os.path.basename(rutas[0])}")
+
+            resumen = {
+                "filas": len(filas), "con_id": con_id,
+                "con_curp": sum(1 for f in filas if f.get("curp")),
+                "sin_ruta": sin_ruta, "sin_mapa": sin_mapa,
+                "periodo": periodo, "desde": desde, "hasta": hasta,
+                "rutas_mapa": len(mapa),
+            }
+            self.puente.terminado.emit("listo", (resumen, rutas))
+
+        except Exception as e:
+            self.puente.fallo.emit(self._explicar(e))
+
+    @Slot()
+    def cerrar(self):
+        try:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+        except Exception:
+            pass
+
+    def _explicar(self, e):
+        t = str(e).split("Stacktrace:")[0].strip()
+        b = t.lower()
+        if "user data directory is already in use" in b:
+            return ("El perfil de Chrome esta en uso por otra ventana.\n\n"
+                    "Cierra las ventanas que abrio este programa y reintenta.")
+        if "devtoolsactiveport" in b or "failed to start" in b:
+            return ("Chrome no pudo arrancar.\n\n"
+                    "Cierra Chrome y reintenta; si sigue, borra la carpeta "
+                    "'chrome_profile' que esta junto al programa.")
+        if "no such window" in b or "target window already closed" in b:
+            return ("Se cerro la ventana de Chrome.\n\n"
+                    "Presiona 'Abrir Mercado Libre' para empezar de nuevo.")
+        if "failed to fetch" in b:
+            return ("El navegador bloqueo la consulta.\n\n"
+                    "Chrome debe estar en la pagina de Mercado Libre.")
+        if "401" in b or "403" in b or "respondio 4" in b:
+            return ("La sesion de Mercado Libre caduco.\n\n"
+                    "Inicia sesion otra vez en la ventana de Chrome.")
+        return t[:400] if t else type(e).__name__
+
+
+class Tarjeta(QFrame):
+    def __init__(self, etiqueta, color=TEXTO):
+        super().__init__()
+        self.setStyleSheet(
+            f"QFrame {{ background: {PANEL}; border: 1px solid {BORDE};"
+            f" border-radius: 7px; }}"
+        )
+        caja = QVBoxLayout(self)
+        caja.setContentsMargins(10, 6, 10, 6)
+        caja.setSpacing(1)
+
+        self.valor = QLabel("-")
+        self.valor.setStyleSheet(
+            f"color: {color}; border: none; font-family: {FUENTE_NUM};"
+            f" font-size: 21px; font-weight: 900;"
+        )
+        self.texto = QLabel(etiqueta.upper())
+        self.texto.setStyleSheet(
+            f"color: {SUAVE}; border: none; font-family: {FUENTE};"
+            f" font-size: 9px; font-weight: 700; letter-spacing: 1px;"
+        )
+        caja.addWidget(self.valor)
+        caja.addWidget(self.texto)
+
+    def poner(self, v):
+        self.valor.setText(str(v))
+
+
+class Ventana(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Prefacturas con ID - Mercado Libre")
+        self.resize(600, 430)
+        self.setMinimumSize(500, 380)
+        self.rutas = None
+        self._armar()
+        self._hilo()
+
+    def _armar(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        central.setStyleSheet(f"background: {FONDO};")
+        raiz = QVBoxLayout(central)
+        raiz.setContentsMargins(12, 10, 12, 10)
+        raiz.setSpacing(7)
+
+        titulo = QLabel("PREFACTURAS CON ID")
+        titulo.setStyleSheet(
+            f"color: {TEXTO}; font-family: {FUENTE_NUM}; font-size: 17px;"
+            f" font-weight: 900; letter-spacing: 1px;"
+        )
+        raiz.addWidget(titulo)
+
+        self.paso = QLabel("Paso 1 de 2  ·  Abre Mercado Libre e inicia sesion")
+        self.paso.setStyleSheet(
+            f"color: {AMARILLO}; font-family: {FUENTE}; font-size: 11px;"
+            f" font-weight: 600;"
+        )
+        raiz.addWidget(self.paso)
+
+        # --- prefactura ---
+        fila_id = QHBoxLayout()
+        fila_id.setSpacing(7)
+        etiqueta = QLabel("Prefactura #")
+        etiqueta.setStyleSheet(
+            f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
+        )
+        self.campo = QLineEdit()
+        self.campo.setPlaceholderText("6442506")
+        self.campo.setFixedHeight(30)
+        self.campo.setStyleSheet(
+            f"QLineEdit {{ background: {PANEL}; color: {TEXTO};"
+            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 0 8px;"
+            f" font-family: {FUENTE}; font-size: 12px; }}"
+            f"QLineEdit:focus {{ border: 1px solid {AZUL}; }}"
+        )
+        self.campo.returnPressed.connect(self.al_extraer)
+        fila_id.addWidget(etiqueta)
+        fila_id.addWidget(self.campo, 1)
+        raiz.addLayout(fila_id)
+
+        # --- botones ---
+        fila = QHBoxLayout()
+        fila.setSpacing(7)
+        self.b_abrir = self._boton("1 · Abrir Mercado Libre", AZUL)
+        self.b_extraer = self._boton("2 · Extraer TODO", VERDE)
+        self.b_carpeta = self._boton("Abrir carpeta", AMARILLO)
+        self.b_abrir.clicked.connect(self.al_abrir)
+        self.b_extraer.clicked.connect(self.al_extraer)
+        self.b_carpeta.clicked.connect(self.al_carpeta)
+        for b in (self.b_abrir, self.b_extraer, self.b_carpeta):
+            fila.addWidget(b)
+        fila.setStretch(0, 2)
+        fila.setStretch(1, 3)
+        fila.setStretch(2, 2)
+        raiz.addLayout(fila)
+        self.b_extraer.setEnabled(False)
+        self.b_carpeta.setEnabled(False)
+
+        # --- tarjetas ---
+        rejilla = QGridLayout()
+        rejilla.setSpacing(6)
+        self.t_lineas = Tarjeta("Lineas", TEXTO)
+        self.t_id = Tarjeta("Con ID usuario", VERDE)
+        self.t_curp = Tarjeta("Con CURP", AZUL)
+        for i, t in enumerate((self.t_lineas, self.t_id, self.t_curp)):
+            rejilla.addWidget(t, 0, i)
+        raiz.addLayout(rejilla)
+
+        # --- registro ---
+        self.registro = QPlainTextEdit()
+        self.registro.setReadOnly(True)
+        self.registro.setMinimumHeight(100)
+        self.registro.setStyleSheet(
+            f"QPlainTextEdit {{ background: #16181d; color: #b9c0cb;"
+            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 6px;"
+            f" font-family: Consolas, monospace; font-size: 10px; }}"
+        )
+        raiz.addWidget(self.registro, 1)
+
+        self.pie = QLabel("Listo para empezar")
+        self.pie.setStyleSheet(
+            f"color: {SUAVE}; font-family: {FUENTE}; font-size: 10px;"
+        )
+        raiz.addWidget(self.pie)
+
+    def _boton(self, texto, color):
+        b = QPushButton(texto)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setMinimumHeight(30)
+        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        letra = "#1e2128" if color == AMARILLO else "#ffffff"
+        b.setStyleSheet(
+            f"QPushButton {{ background: {color}; color: {letra};"
+            f" border: none; border-radius: 6px; font-family: {FUENTE};"
+            f" font-size: 11px; font-weight: 800; padding: 0 8px;"
+            f" letter-spacing: 0.4px; }}"
+            f"QPushButton:disabled {{ background: #2c3038; color: #5a616d; }}"
+        )
+        return b
+
+    def _hilo(self):
+        self.puente = Puente()
+        self.ordenes = Ordenes()
+        self.hilo = QThread()
+        self.trabajador = Trabajador(self.puente)
+        self.trabajador.moveToThread(self.hilo)
+
+        self.ordenes.abrir.connect(self.trabajador.abrir_navegador)
+        self.ordenes.extraer.connect(self.trabajador.extraer)
+        self.ordenes.cerrar.connect(self.trabajador.cerrar)
+
+        self.puente.mensaje.connect(self.escribir)
+        self.puente.terminado.connect(self.al_terminar)
+        self.puente.fallo.connect(self.al_fallar)
+        self.hilo.start()
+
+    # --------------------------------------------------------- acciones
+    def escribir(self, t):
+        hora = datetime.now().strftime("%H:%M:%S")
+        self.registro.appendPlainText(f"[{hora}]  {t}")
+        self.registro.verticalScrollBar().setValue(
+            self.registro.verticalScrollBar().maximum()
+        )
+
+    def al_abrir(self):
+        self.b_abrir.setEnabled(False)
+        self.escribir("Abriendo Chrome...")
+        self.pie.setText("Abriendo Chrome, espera un momento...")
+        self.ordenes.abrir.emit()
+
+    def al_extraer(self):
+        if not self.b_extraer.isEnabled():
+            return
+        id_pref = self.campo.text().strip() or self.campo.placeholderText()
+        if not id_pref.isdigit():
+            QMessageBox.warning(
+                self, "Numero invalido",
+                "Escribe el numero de la prefactura, solo digitos.\n"
+                "Por ejemplo: 6442506"
+            )
+            return
+        self.b_extraer.setEnabled(False)
+        self.b_extraer.setText("Extrayendo...")
+        self.pie.setText("Extrayendo. Puedes seguir usando la PC.")
+        self.escribir(f"Extrayendo la prefactura {id_pref}...")
+        self.ordenes.extraer.emit(id_pref)
+
+    def al_carpeta(self):
+        destino = os.path.dirname(self.rutas[0]) if self.rutas else _carpeta_base()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(destino))
+
+    def al_terminar(self, etapa, datos):
+        if etapa == "navegador":
+            self.paso.setText(
+                "Paso 2 de 2  ·  Escribe la prefactura y presiona 'Extraer TODO'"
+            )
+            self.b_extraer.setEnabled(True)
+            self.b_extraer.setProperty("listo", True)
+            self.b_abrir.setText("Reabrir Chrome")
+            self.b_abrir.setEnabled(True)
+            self.pie.setText("Esperando a que inicies sesion")
+            self.campo.setFocus()
+
+        elif etapa == "listado" or etapa == "listo":
+            resumen, rutas = datos
+            self.rutas = rutas
+            self.t_lineas.poner(resumen["filas"])
+            self.t_id.poner(resumen["con_id"])
+            self.t_curp.poner(resumen["con_curp"])
+
+            self.paso.setText("Listo  ·  El archivo ya esta guardado")
+            self.b_extraer.setText("Extraer otra vez")
+            self.b_extraer.setEnabled(True)
+            self.b_carpeta.setEnabled(True)
+            self.b_carpeta.setProperty("listo", True)
+            self.pie.setText(f"{resumen['filas']} lineas guardadas")
+            self._avisar(resumen, rutas)
+
+    def al_fallar(self, mensaje):
+        self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
+        self.b_abrir.setEnabled(True)
+        self.b_extraer.setText("2 · Extraer TODO")
+        for b in (self.b_extraer, self.b_carpeta):
+            if b.property("listo") is True:
+                b.setEnabled(True)
+        aviso = QMessageBox(self)
+        aviso.setWindowTitle("Algo salio mal")
+        aviso.setIcon(QMessageBox.Warning)
+        aviso.setText(mensaje)
+        aviso.show()
+        barra_titulo_oscura(aviso)
+        aviso.exec()
+        self.pie.setText("Ocurrio un error, revisa el registro")
+
+    def _avisar(self, r, rutas):
+        detalle = [
+            f"Periodo {r['periodo']}  ({r['desde']} a {r['hasta']})",
+            f"{r['con_id']} lineas con ID de usuario",
+            f"{r['con_curp']} con CURP",
+        ]
+        if r["sin_mapa"]:
+            detalle.append(
+                f"{r['sin_mapa']} rutas no estaban en el reporte del periodo"
+            )
+        if r["sin_ruta"]:
+            detalle.append(f"{r['sin_ruta']} lineas sin ID de ruta")
+
+        caja = QMessageBox(self)
+        caja.setWindowTitle("Extraccion completa")
+        caja.setIcon(QMessageBox.Information)
+        caja.setText(f"Se extrajeron {r['filas']} lineas.\n\n" + "\n".join(detalle))
+        caja.setInformativeText(
+            f"{os.path.basename(rutas[0])}\n{os.path.basename(rutas[1])}"
+        )
+        abrir = caja.addButton("Abrir carpeta", QMessageBox.AcceptRole)
+        caja.addButton("Cerrar", QMessageBox.RejectRole)
+        caja.show()
+        barra_titulo_oscura(caja)
+        caja.exec()
+        if caja.clickedButton() is abrir:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(rutas[0])))
+
+    def closeEvent(self, evento):
+        self.ordenes.cerrar.emit()
+        self.hilo.quit()
+        if not self.hilo.wait(6000):
+            self.hilo.terminate()
+            self.hilo.wait(1500)
+        evento.accept()
+
+
+def main():
+    registro_error = os.path.join(_carpeta_base(), "error_arranque.txt")
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+        v = Ventana()
+        v.show()
+        barra_titulo_oscura(v)
+        v.raise_()
+        v.activateWindow()
+        v.escribir("Extractor de prefacturas listo.")
+        v.escribir("Presiona '1 · Abrir Mercado Libre' para empezar.")
+        codigo = app.exec()
+        try:
+            if os.path.exists(registro_error):
+                os.remove(registro_error)
+        except Exception:
+            pass
+        sys.exit(codigo)
+    except Exception:
+        try:
+            with open(registro_error, "w", encoding="utf-8") as f:
+                f.write("El programa no pudo arrancar.\n\n")
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+        raise
+
+
+if __name__ == "__main__":
+    main()

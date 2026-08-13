@@ -50,6 +50,11 @@ AZUL = "#3483fa"
 VERDE = "#00a650"
 ROJO = "#f23d4f"
 
+# Fuente de la interfaz. Segoe UI Semibold viene con Windows y se ve mas
+# solida que la predeterminada; si faltara, Qt cae en las siguientes.
+FUENTE = '"Segoe UI Semibold", "Segoe UI", "Franklin Gothic Medium", Arial'
+FUENTE_NUM = '"Segoe UI Black", "Segoe UI", Impact, Arial'
+
 
 class Puente(QObject):
     """Permite que el hilo de trabajo mande mensajes a la ventana."""
@@ -325,18 +330,20 @@ class Tarjeta(QFrame):
             f" border-radius: 8px; }}"
         )
         caja = QVBoxLayout(self)
-        caja.setContentsMargins(8, 5, 8, 5)
-        caja.setSpacing(0)
+        caja.setContentsMargins(10, 6, 10, 6)
+        caja.setSpacing(1)
 
         self.valor = QLabel("-")
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        self.valor.setFont(f)
-        self.valor.setStyleSheet(f"color: {color}; border: none;")
+        self.valor.setStyleSheet(
+            f"color: {color}; border: none; font-family: {FUENTE_NUM};"
+            f" font-size: 21px; font-weight: 900;"
+        )
 
-        self.texto = QLabel(etiqueta)
-        self.texto.setStyleSheet(f"color: {SUAVE}; font-size: 9px; border: none;")
+        self.texto = QLabel(etiqueta.upper())
+        self.texto.setStyleSheet(
+            f"color: {SUAVE}; border: none; font-family: {FUENTE};"
+            f" font-size: 9px; font-weight: 700; letter-spacing: 1px;"
+        )
 
         caja.addWidget(self.valor)
         caja.addWidget(self.texto)
@@ -367,16 +374,18 @@ class Ventana(QMainWindow):
         raiz.setSpacing(7)
 
         # --- encabezado ---
-        titulo = QLabel("Extractor de Drivers")
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        titulo.setFont(f)
-        titulo.setStyleSheet(f"color: {TEXTO};")
+        titulo = QLabel("EXTRACTOR DE DRIVERS")
+        titulo.setStyleSheet(
+            f"color: {TEXTO}; font-family: {FUENTE_NUM}; font-size: 17px;"
+            f" font-weight: 900; letter-spacing: 1px;"
+        )
         raiz.addWidget(titulo)
 
         self.paso = QLabel("Paso 1 de 2  ·  Abre Mercado Libre e inicia sesion")
-        self.paso.setStyleSheet(f"color: {AMARILLO}; font-size: 11px;")
+        self.paso.setStyleSheet(
+            f"color: {AMARILLO}; font-family: {FUENTE}; font-size: 11px;"
+            f" font-weight: 600;"
+        )
         raiz.addWidget(self.paso)
 
         # --- botones ---
@@ -440,7 +449,9 @@ class Ventana(QMainWindow):
 
         # --- pie ---
         self.pie = QLabel("Listo para empezar")
-        self.pie.setStyleSheet(f"color: {SUAVE}; font-size: 10px;")
+        self.pie.setStyleSheet(
+            f"color: {SUAVE}; font-family: {FUENTE}; font-size: 10px;"
+        )
         raiz.addWidget(self.pie)
 
     def _boton(self, texto, color, principal=False):
@@ -453,8 +464,9 @@ class Ventana(QMainWindow):
             letra = TEXTO
         b.setStyleSheet(
             f"QPushButton {{ background: {color}; color: {letra};"
-            f" border: none; border-radius: 6px; font-size: 11px;"
-            f" font-weight: 600; padding: 0 8px; }}"
+            f" border: none; border-radius: 6px; font-family: {FUENTE};"
+            f" font-size: 11px; font-weight: 800; padding: 0 8px;"
+            f" letter-spacing: 0.4px; }}"
             f"QPushButton:hover {{ background: {color}; opacity: 0.9; }}"
             f"QPushButton:disabled {{ background: #2c3038; color: #5a616d; }}"
         )
@@ -566,6 +578,8 @@ class Ventana(QMainWindow):
         caja = QMessageBox(self)
         caja.setWindowTitle("Extraccion completa")
         caja.setIcon(QMessageBox.Information)
+        caja.show()
+        barra_titulo_oscura(caja)
         caja.setText(
             f"Se extrajeron {len(registros)} drivers.\n\n" + "\n".join(lineas)
         )
@@ -589,7 +603,13 @@ class Ventana(QMainWindow):
         for b in (self.b_todo, self.b_guardar):
             if b.property("listo") is True:
                 b.setEnabled(True)
-        QMessageBox.warning(self, "Algo salio mal", mensaje)
+        aviso = QMessageBox(self)
+        aviso.setWindowTitle("Algo salio mal")
+        aviso.setIcon(QMessageBox.Warning)
+        aviso.setText(mensaje)
+        aviso.show()
+        barra_titulo_oscura(aviso)
+        aviso.exec()
         self.pie.setText("Ocurrio un error, revisa el registro")
 
     # Color por estatus; lo que no este aqui usa gris
@@ -647,6 +667,48 @@ class Ventana(QMainWindow):
         evento.accept()
 
 
+def barra_titulo_oscura(ventana):
+    """Pinta la barra de titulo del mismo gris que el fondo de la app.
+
+    La barra la dibuja Windows, no Qt, asi que hay que pedirselo por
+    DwmSetWindowAttribute:
+      - 20 (19 en builds viejas): modo oscuro, para que el texto salga claro
+      - 35: color exacto de la barra (solo Windows 11 build 22000+)
+
+    En Windows 10 el 35 no existe y la barra queda negra por el modo oscuro,
+    que es lo mas parecido posible. Si nada funciona, se queda clara.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(ventana.winId()))
+        dwm = ctypes.windll.dwmapi
+
+        # 1) Modo oscuro: hace que el texto y los botones salgan en claro
+        activar = ctypes.c_int(1)
+        for atributo in (20, 19):
+            if dwm.DwmSetWindowAttribute(
+                hwnd, ctypes.c_uint(atributo),
+                ctypes.byref(activar), ctypes.sizeof(activar),
+            ) == 0:
+                break
+
+        # 2) Color exacto igual al fondo. Windows lo espera como COLORREF,
+        #    o sea 0x00BBGGRR: los componentes van al reves que en HTML.
+        r, g, b = (int(FONDO[i:i + 2], 16) for i in (1, 3, 5))
+        color = ctypes.c_uint((b << 16) | (g << 8) | r)
+        dwm.DwmSetWindowAttribute(
+            hwnd, ctypes.c_uint(35),      # DWMWA_CAPTION_COLOR
+            ctypes.byref(color), ctypes.sizeof(color),
+        )
+    except Exception:
+        # Si el sistema no lo soporta, seguimos con lo que haya
+        pass
+
+
 def _carpeta_base():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
@@ -662,6 +724,8 @@ def main():
         app.setStyle("Fusion")
         ventana = Ventana()
         ventana.show()
+        # Despues de show(): antes la ventana no tiene handle que pintar
+        barra_titulo_oscura(ventana)
         ventana.raise_()
         ventana.activateWindow()
         ventana.escribir("Extractor de Drivers listo.")
