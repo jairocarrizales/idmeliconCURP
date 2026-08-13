@@ -133,13 +133,36 @@ la trae es una invitación pendiente, y **enmascarada por el propio MELI**
 Lo mismo pasa con `blockingReason`: llega vacío incluso en los 543 bloqueados —
 el motivo solo aparece en la ficha individual.
 
-Para conseguirlos habría que consultar la API del perfil driver por driver.
-`ProbarPerfilAPI.exe` averigua si esa API existe: prueba varias rutas candidatas
-con **un solo** registro y reporta cuál responde y qué campos trae, antes de
-invertir tiempo en las 2,000 consultas.
+### La ficha individual sí los trae
 
-Si la encuentra, extraer los contactos tomaría unos minutos (una llamada HTTP por
-driver) en lugar de la media hora que costaría abrir cada perfil con Selenium.
+`ProbarPerfilAPI.exe` localizó la API del perfil:
+
+```
+GET /logistics/provider-management/api/drivers/<id>
+→ 200  { id, firstName, lastName, email, phone, blockingReason,
+         identificationValue, status, carrierId, siteId, ... }
+```
+
+Así que `ExtraerDriversAPI.exe` **pregunta al terminar** si quieres traerlos.
+Si aceptas, consulta las fichas y llena Teléfono, E-mail y Observación.
+
+**Cómo se hace rápido.** Una llamada por driver en serie tardaría demasiado; el
+tiempo lo domina la latencia, no el cómputo. Se piden **12 fichas en paralelo**
+por lote, con `Promise.all` dentro de la página. Medición con 120 fichas de
+prueba:
+
+| Lote | Ritmo | Proyección a 2,024 fichas |
+|---:|---:|---:|
+| 1 (en serie) | 6/s | 5.4 min |
+| 6 | 11/s | 3.2 min |
+| **12** | **24/s** | **1.4 min** |
+| 20 | 36/s | 0.9 min |
+
+Se eligió 12 y no el máximo: la mejora de 12 a 20 no compensa el riesgo de que
+el servidor empiece a limitar peticiones.
+
+El listado se guarda a disco **antes** de este paso, así que una interrupción no
+cuesta lo ya obtenido.
 
 **Versión HTML** — intenta sacar el ID del enlace de cada fila; si el listado no
 los expone (que es el caso hoy), recurre al menú de 3 puntos, abriendo perfil por

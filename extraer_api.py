@@ -32,6 +32,17 @@ API = (
     "https://envios.adminml.com/logistics/provider-management/api/drivers/"
     "drivers-and-invites"
 )
+# Ficha individual: /api/drivers/<id> — la unica que devuelve phone e email
+API_PERFIL = "https://envios.adminml.com/logistics/provider-management/api/drivers/"
+
+# Cuantas fichas se piden a la vez. Medido con 120 fichas de prueba:
+#   lote 1  -> 6 fichas/s    lote 12 -> 24 fichas/s
+#   lote 6  -> 11 fichas/s   lote 20 -> 36 fichas/s
+# Se elige 12 en vez del maximo para no saturar al servidor: la mejora de
+# 12 a 20 es menor que el riesgo de que empiece a limitar las peticiones.
+LOTE_PERFILES = 12
+# Pausa entre lotes de fichas (la de paginacion es distinta)
+PAUSA_PERFILES = 0.2
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -259,6 +270,89 @@ def extraer_todo(driver):
     return registros
 
 
+def pedir_lote_perfiles(driver, ids):
+    """Pide varias fichas a la vez y devuelve {id: {phone, email, motivo}}.
+
+    Lanzar las peticiones en paralelo dentro de la pagina es mucho mas rapido
+    que una por una, porque el tiempo lo domina la latencia de red.
+    """
+    script = """
+    const base = arguments[0];
+    const ids  = arguments[1];
+    const done = arguments[arguments.length - 1];
+    Promise.all(ids.map(id =>
+      fetch(base + id, {credentials:'include', headers:{'Accept':'application/json'}})
+        .then(r => r.ok ? r.json() : null)
+        .then(j => ({id: id, ok: !!j, data: j}))
+        .catch(() => ({id: id, ok: false, data: null}))
+    )).then(done);
+    """
+    driver.set_script_timeout(120)
+    respuestas = driver.execute_async_script(script, API_PERFIL, list(ids))
+
+    salida = {}
+    for r in respuestas or []:
+        if not r or not r.get("ok"):
+            continue
+        d = r.get("data") or {}
+        salida[str(r.get("id"))] = {
+            "telefono": limpiar(d.get("phone")),
+            "email": limpiar(d.get("email")),
+            "motivo": motivo_bloqueo(d.get("blockingReason")),
+        }
+    return salida
+
+
+def completar_contactos(driver, registros):
+    """Consulta la ficha de cada driver para traer telefono, e-mail y motivo."""
+    pendientes = [r for r in registros if r.get("id") and r["id"] != "0"]
+    total = len(pendientes)
+    if not total:
+        log("No hay registros con ID consultable.")
+        return
+
+    log(f"Consultando {total} fichas en lotes de {LOTE_PERFILES}...")
+    por_id = {r["id"]: r for r in pendientes}
+    hechos = fallidos = 0
+    inicio = time.time()
+
+    for i in range(0, total, LOTE_PERFILES):
+        lote = [r["id"] for r in pendientes[i:i + LOTE_PERFILES]]
+        try:
+            datos = pedir_lote_perfiles(driver, lote)
+        except Exception as e:
+            fallidos += len(lote)
+            log(f"  Lote {i // LOTE_PERFILES + 1}: fallo ({str(e)[:70]})")
+            continue
+
+        for id_str, campos in datos.items():
+            reg = por_id.get(id_str)
+            if not reg:
+                continue
+            reg["telefono"] = campos["telefono"]
+            reg["email"] = campos["email"]
+            # El motivo del bloqueo tampoco viene en el listado
+            if campos["motivo"] and not reg.get("observacion"):
+                reg["observacion"] = campos["motivo"]
+            hechos += 1
+
+        fallidos += len(lote) - len(datos)
+
+        procesados = min(i + LOTE_PERFILES, total)
+        if procesados % 120 < LOTE_PERFILES or procesados == total:
+            transcurrido = time.time() - inicio
+            ritmo = procesados / transcurrido if transcurrido else 0
+            faltan = (total - procesados) / ritmo if ritmo else 0
+            log(
+                f"  {procesados}/{total} fichas "
+                f"({ritmo:.0f}/s, faltan ~{faltan / 60:.1f} min)"
+            )
+
+        time.sleep(PAUSA_PERFILES)
+
+    log(f"Fichas leidas: {hechos}. Sin respuesta: {fallidos}.")
+
+
 def guardar(registros):
     sello = datetime.now().strftime("%Y%m%d_%H%M%S")
     ruta_txt = os.path.join(BASE_DIR, f"drivers_meli_{sello}.txt")
@@ -350,7 +444,33 @@ def main():
             input(">>> ENTER para cerrar... ")
             return
 
+        # Se guarda ya lo del listado: si el paso de fichas falla o se
+        # interrumpe, no se pierde lo que ya se trajo.
         txt, csv_path = guardar(registros)
+        log(f"Respaldo guardado: {os.path.basename(txt)}")
+
+        # --- Paso opcional: telefono, e-mail y motivo de bloqueo ---
+        consultables = sum(1 for r in registros if r.get("id") and r["id"] != "0")
+        # ~24 fichas/s medidos en pruebas; se es conservador por la red real
+        minutos = max(1, round(consultables / 12 / 60))
+
+        print()
+        print("-" * 70)
+        print("  El listado no incluye telefono, e-mail ni motivo de bloqueo.")
+        print("  Se pueden traer consultando la ficha de cada driver:")
+        print(f"  {consultables} fichas, unos {minutos}-{minutos * 3} minutos.")
+        print("-" * 70)
+        resp = input("\n>>> Traer telefono y e-mail? (s/n): ").strip().lower()
+
+        if resp.startswith("s"):
+            try:
+                completar_contactos(driver, registros)
+            except KeyboardInterrupt:
+                log("Interrumpido; se guarda lo obtenido hasta ahora.")
+            except Exception as e:
+                log(f"Fallo la consulta de fichas: {e}")
+                log("Se guarda lo que se alcanzo a obtener.")
+            txt, csv_path = guardar(registros)
 
         conteo = {}
         for r in registros:
@@ -375,9 +495,9 @@ def main():
         print(f"    Con e-mail               {n_mail}/{len(registros)}")
         print()
         if not n_tel:
-            print("    Nota: la API del listado no devuelve telefono ni e-mail")
-            print("    de los drivers activos; solo estan en la ficha individual.")
-            print("    Usa ProbarPerfilAPI.exe para buscar la API de la ficha.")
+            print("    Nota: el telefono y el e-mail solo estan en la ficha")
+            print("    individual. Vuelve a correr el programa y responde 's'")
+            print("    cuando pregunte si traer telefono y e-mail.")
             print()
         print(f"  TXT (tabs, para Excel): {txt}")
         print(f"  CSV (punto y coma)    : {csv_path}")
