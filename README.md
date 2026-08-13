@@ -42,18 +42,21 @@ bloqueados solo rescataba el estatus.
 
 ## Uso rápido (interfaz gráfica)
 
-Ejecuta **`DriversMeli.exe`** y sigue los botones numerados:
+Ejecuta **`DriversMeli.exe`**. Son dos clics:
 
 | Botón | Qué hace |
 |---|---|
-| **1 · Abrir Mercado Libre** | Lanza Chrome en la página de drivers |
-| **2 · Ya inicié sesión, extraer** | Trae los ~2,000 drivers en segundos |
-| **3 · Traer teléfonos** | Opcional: consulta las fichas (~2 min) |
-| **Guardar resultado** | Escribe el TXT y el CSV, y ofrece abrir la carpeta |
+| **1 · Abrir Mercado Libre** | Lanza Chrome — ahí inicias sesión |
+| **2 · Descargar TODO** | Listado + teléfonos + guardado, de corrido |
 
-Los botones se habilitan conforme avanzas, así que no hay forma de saltarse un
-paso. Las tarjetas muestran los totales por estatus y el registro de actividad
-queda a la vista dentro de la ventana.
+El segundo botón hace el trabajo completo sin pedir nada más: descarga los
+~2,000 drivers, consulta las fichas para traer teléfono, correo y motivo de
+bloqueo, y escribe el TXT y el CSV. Al terminar muestra el resumen y ofrece
+abrir la carpeta.
+
+Hay una tarjeta por cada estatus que aparezca, así que **las categorías siempre
+suman el total** — si MELI agrega un estatus nuevo, se le crea su tarjeta sola.
+El registro de actividad queda a la vista dentro de la ventana.
 
 **Por qué existe esta versión:** en la de consola había que presionar ENTER
 varias veces para que la terminal reaccionara — cuando el foco está en Chrome,

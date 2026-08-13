@@ -8,9 +8,7 @@ El registro de actividad se ve en un panel dentro de la misma ventana.
 Flujo:
   1. "Abrir Mercado Libre"  -> lanza Chrome en la pagina de drivers
   2. Inicias sesion a mano
-  3. "Ya inicie sesion"     -> extrae el listado por API (segundos)
-  4. "Traer telefonos"      -> opcional, consulta las fichas
-  5. "Guardar resultado"    -> escribe el TXT y el CSV
+  3. "Descargar TODO"       -> listado, telefonos y guardado, de una vez
 """
 
 import os
@@ -70,8 +68,7 @@ class Ordenes(QObject):
     """
 
     abrir = Signal()
-    extraer = Signal()
-    contactos = Signal()
+    todo = Signal()
     cerrar = Signal()
 
 
@@ -117,7 +114,8 @@ class Trabajador(QObject):
             self.puente.fallo.emit(self._explicar(e))
 
     @Slot()
-    def extraer_listado(self):
+    def descargar_todo(self):
+        """Hace todo el trabajo de una sola vez: listado, fichas y guardado."""
         try:
             if not self.driver:
                 self.puente.fallo.emit("Primero hay que abrir Chrome.")
@@ -126,10 +124,10 @@ class Trabajador(QObject):
             if not self._preparar_pagina():
                 return
 
-            self.log("Consultando la API del listado...")
+            # --- 1) Listado ---
+            self.log("Paso 1 de 3: descargando la lista de drivers...")
             inicio = time.time()
             self.registros = nucleo.extraer_todo(self.driver)
-            tardo = time.time() - inicio
 
             if not self.registros:
                 self.puente.fallo.emit(
@@ -139,10 +137,57 @@ class Trabajador(QObject):
                 )
                 return
 
-            self.log(f"Listo: {len(self.registros)} drivers en {tardo:.1f} s")
+            self.log(
+                f"  {len(self.registros)} drivers en {time.time() - inicio:.1f} s"
+            )
+            # Avisar ya: las tarjetas se llenan sin esperar a las fichas
             self.puente.terminado.emit("listado", self.registros)
+
+            # Respaldo temprano, por si las fichas se interrumpen
+            try:
+                nucleo.guardar(self.registros)
+            except Exception:
+                pass
+
+            # --- 2) Fichas ---
+            self.log("Paso 2 de 3: trayendo telefonos y correos...")
+            self._consultar_fichas()
+
+            # --- 3) Guardado ---
+            self.log("Paso 3 de 3: guardando archivos...")
+            rutas = nucleo.guardar(self.registros)
+            self.log(f"  {os.path.basename(rutas[0])}")
+            self.log(f"  {os.path.basename(rutas[1])}")
+
+            self.puente.terminado.emit("todo", (self.registros, rutas))
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
+
+    def _consultar_fichas(self):
+        """Consulta las fichas informando el avance a la barra."""
+        total = sum(1 for r in self.registros if r.get("id") and r["id"] != "0")
+        if not total:
+            return
+        self.puente.avance.emit(0, total)
+
+        hechos = {"n": 0}
+        original = nucleo.pedir_lote_perfiles
+
+        def con_avance(driver, ids):
+            if self.cancelado:
+                raise KeyboardInterrupt("cancelado")
+            res = original(driver, ids)
+            hechos["n"] += len(ids)
+            self.puente.avance.emit(min(hechos["n"], total), total)
+            return res
+
+        nucleo.pedir_lote_perfiles = con_avance
+        try:
+            nucleo.completar_contactos(self.driver, self.registros)
+        except KeyboardInterrupt:
+            self.log("  Cancelado; se guarda lo obtenido hasta ahora.")
+        finally:
+            nucleo.pedir_lote_perfiles = original
 
     def _preparar_pagina(self):
         """Deja a Chrome parado en el dominio de MELI, con sesion activa.
@@ -202,60 +247,23 @@ class Trabajador(QObject):
                     "1. Ve a la ventana de Chrome que abrio el programa\n"
                     "2. Asegurate de estar en la LISTA DE TRANSPORTISTAS\n"
                     "   (envios.adminml.com/logistics/provider-management/drivers)\n"
-                    "3. Presiona otra vez el boton 2"
+                    "3. Presiona otra vez 'Descargar TODO'"
                 )
                 return False
             if "401" in texto or "403" in texto or "no devolvio json" in texto:
                 self.puente.fallo.emit(
                     "Tu sesion de Mercado Libre no esta activa.\n\n"
                     "Inicia sesion en la ventana de Chrome y vuelve a "
-                    "presionar el boton 2."
+                    "presionar 'Descargar TODO'."
                 )
                 return False
 
         self.puente.fallo.emit(
             "No se pudo consultar la lista de drivers.\n\n"
             "Revisa que en Chrome se vea la lista de transportistas y que "
-            "tu sesion siga abierta, luego presiona otra vez el boton 2."
+            "tu sesion siga abierta, luego presiona otra vez 'Descargar TODO'."
         )
         return False
-
-    @Slot()
-    def traer_contactos(self):
-        try:
-            if not self.registros:
-                self.puente.fallo.emit("Primero hay que extraer el listado.")
-                return
-
-            total = sum(
-                1 for r in self.registros if r.get("id") and r["id"] != "0"
-            )
-            self.puente.avance.emit(0, total)
-
-            # Enganchar el avance del nucleo al de la ventana
-            hechos = {"n": 0}
-            original = nucleo.pedir_lote_perfiles
-
-            def con_avance(driver, ids):
-                if self.cancelado:
-                    raise KeyboardInterrupt("cancelado por el usuario")
-                res = original(driver, ids)
-                hechos["n"] += len(ids)
-                self.puente.avance.emit(min(hechos["n"], total), total)
-                return res
-
-            nucleo.pedir_lote_perfiles = con_avance
-            try:
-                nucleo.completar_contactos(self.driver, self.registros)
-            finally:
-                nucleo.pedir_lote_perfiles = original
-
-            self.puente.terminado.emit("contactos", self.registros)
-        except KeyboardInterrupt:
-            self.log("Consulta de fichas cancelada.")
-            self.puente.terminado.emit("contactos", self.registros)
-        except Exception as e:
-            self.puente.fallo.emit(self._explicar(e))
 
     @Slot()
     def cerrar(self):
@@ -302,7 +310,7 @@ class Trabajador(QObject):
             return (
                 "La sesion de Mercado Libre caduco.\n\n"
                 "Inicia sesion otra vez en la ventana de Chrome y vuelve a "
-                "presionar el boton 2."
+                "presionar 'Descargar TODO'."
             )
         return texto[:400] if texto else type(e).__name__
 
@@ -366,7 +374,7 @@ class Ventana(QMainWindow):
         titulo.setStyleSheet(f"color: {TEXTO};")
         raiz.addWidget(titulo)
 
-        self.paso = QLabel("Paso 1 de 3  ·  Abre Mercado Libre e inicia sesion")
+        self.paso = QLabel("Paso 1 de 2  ·  Abre Mercado Libre e inicia sesion")
         self.paso.setStyleSheet(f"color: {AMARILLO}; font-size: 13px;")
         raiz.addWidget(self.paso)
 
@@ -375,35 +383,36 @@ class Ventana(QMainWindow):
         fila.setSpacing(10)
 
         self.b_abrir = self._boton("1 · Abrir Mercado Libre", AZUL, True)
-        self.b_extraer = self._boton("2 · Ya inicie sesion, extraer", VERDE)
-        self.b_contactos = self._boton("3 · Traer telefonos (opcional)", PANEL)
-        self.b_guardar = self._boton("Guardar resultado", AMARILLO)
+        self.b_todo = self._boton("2 · Descargar TODO", VERDE)
+        self.b_guardar = self._boton("Abrir carpeta", AMARILLO)
 
         self.b_abrir.clicked.connect(self.al_abrir)
-        self.b_extraer.clicked.connect(self.al_extraer)
-        self.b_contactos.clicked.connect(self.al_contactos)
+        self.b_todo.clicked.connect(self.al_descargar_todo)
         self.b_guardar.clicked.connect(self.al_guardar)
 
-        for b in (self.b_abrir, self.b_extraer, self.b_contactos, self.b_guardar):
+        for b in (self.b_abrir, self.b_todo, self.b_guardar):
             fila.addWidget(b)
+        # El boton principal se lleva mas ancho
+        fila.setStretch(0, 2)
+        fila.setStretch(1, 3)
+        fila.setStretch(2, 2)
         raiz.addLayout(fila)
 
-        self.b_extraer.setEnabled(False)
-        self.b_contactos.setEnabled(False)
+        self.b_todo.setEnabled(False)
         self.b_guardar.setEnabled(False)
 
         # --- tarjetas ---
-        rejilla = QGridLayout()
-        rejilla.setSpacing(10)
+        # Se arman al vuelo segun los estatus que traiga la extraccion, para
+        # que las categorias siempre sumen el total y no quede nada fuera.
+        self.rejilla = QGridLayout()
+        self.rejilla.setSpacing(10)
+        self.tarjetas = {}          # estatus -> Tarjeta
+
         self.t_total = Tarjeta("Drivers", TEXTO)
-        self.t_activos = Tarjeta("Activos", VERDE)
-        self.t_bloqueados = Tarjeta("Bloqueados", ROJO)
         self.t_telefonos = Tarjeta("Con telefono", AZUL)
-        for i, t in enumerate(
-            (self.t_total, self.t_activos, self.t_bloqueados, self.t_telefonos)
-        ):
-            rejilla.addWidget(t, 0, i)
-        raiz.addLayout(rejilla)
+        self.rejilla.addWidget(self.t_total, 0, 0)
+        self.rejilla.addWidget(self.t_telefonos, 0, 1)
+        raiz.addLayout(self.rejilla)
 
         # --- barra de avance ---
         self.barra = QProgressBar()
@@ -462,8 +471,7 @@ class Ventana(QMainWindow):
 
         # De la ventana hacia el trabajador
         self.ordenes.abrir.connect(self.trabajador.abrir_navegador)
-        self.ordenes.extraer.connect(self.trabajador.extraer_listado)
-        self.ordenes.contactos.connect(self.trabajador.traer_contactos)
+        self.ordenes.todo.connect(self.trabajador.descargar_todo)
         self.ordenes.cerrar.connect(self.trabajador.cerrar)
 
         # Del trabajador hacia la ventana
@@ -499,59 +507,17 @@ class Ventana(QMainWindow):
         self.pie.setText("Abriendo Chrome, espera un momento...")
         self.ordenes.abrir.emit()
 
-    def al_extraer(self):
-        self.b_extraer.setEnabled(False)
-        self.pie.setText("Consultando la API...")
-        self.ordenes.extraer.emit()
-
-    def al_contactos(self):
-        n = sum(1 for r in self.registros if r.get("id") and r["id"] != "0")
-        minutos = max(1, round(n / 12 / 60))
-        r = QMessageBox.question(
-            self,
-            "Traer telefonos y correos",
-            f"Se consultara la ficha de {n} drivers para obtener su telefono, "
-            f"correo y motivo de bloqueo.\n\n"
-            f"Tomara alrededor de {minutos} a {minutos * 3} minutos.\n\n"
-            "El listado que ya tienes no se pierde. Continuar?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if r != QMessageBox.Yes:
-            return
-        self.b_contactos.setEnabled(False)
-        self.pie.setText("Consultando fichas... puedes seguir usando la PC.")
-        self.ordenes.contactos.emit()
+    def al_descargar_todo(self):
+        self.b_todo.setEnabled(False)
+        self.b_todo.setText("Descargando...")
+        self.pie.setText("Descargando todo. Puedes seguir usando la PC.")
+        self.escribir("Iniciando descarga completa...")
+        self.ordenes.todo.emit()
 
     def al_guardar(self):
-        if not self.registros:
-            return
-        try:
-            txt, csvf = nucleo.guardar(self.registros)
-            self.rutas = (txt, csvf)
-            self.escribir(f"Guardado: {os.path.basename(txt)}")
-            self.escribir(f"Guardado: {os.path.basename(csvf)}")
-
-            caja = QMessageBox(self)
-            caja.setWindowTitle("Resultado guardado")
-            caja.setIcon(QMessageBox.Information)
-            caja.setText(
-                f"Se guardaron {len(self.registros)} drivers.\n\n"
-                f"{os.path.basename(txt)}\n{os.path.basename(csvf)}"
-            )
-            caja.setInformativeText(
-                "El TXT se pega directo en Excel; el CSV se abre con doble clic."
-            )
-            abrir = caja.addButton("Abrir carpeta", QMessageBox.AcceptRole)
-            caja.addButton("Cerrar", QMessageBox.RejectRole)
-            caja.exec()
-
-            if caja.clickedButton() is abrir:
-                QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(os.path.dirname(txt))
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "No se pudo guardar", str(e)[:300])
+        """Abre la carpeta donde quedaron los archivos."""
+        destino = os.path.dirname(self.rutas[0]) if self.rutas else _carpeta_base()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(destino))
 
     # ------------------------------------------------------------ eventos
     def al_terminar(self, etapa, datos):
@@ -559,60 +525,125 @@ class Ventana(QMainWindow):
 
         if etapa == "navegador":
             self.paso.setText(
-                "Paso 2 de 3  ·  Inicia sesion en Chrome, luego presiona el boton 2"
+                "Paso 2 de 2  ·  Inicia sesion en Chrome y presiona 'Descargar TODO'"
             )
-            self._habilitar(self.b_extraer, True)
+            self._habilitar(self.b_todo, True)
             self.b_abrir.setText("Reabrir Chrome")
             self.b_abrir.setEnabled(True)
             self.pie.setText("Esperando a que inicies sesion")
 
         elif etapa == "listado":
+            # Avance intermedio: las tarjetas se llenan mientras siguen las fichas
             self.registros = datos or []
             self._resumir()
-            self.paso.setText(
-                "Paso 3 de 3  ·  Guarda el resultado, o trae tambien los telefonos"
-            )
-            self._habilitar(self.b_contactos, True)
-            self._habilitar(self.b_guardar, True)
-            self.b_extraer.setEnabled(True)
             self.pie.setText(
-                f"{len(self.registros)} drivers listos para guardar"
+                f"{len(self.registros)} drivers descargados. Trayendo telefonos..."
             )
 
-            # Guardado automatico: no perder lo ya extraido
-            try:
-                txt, csvf = nucleo.guardar(self.registros)
-                self.rutas = (txt, csvf)
-                self.escribir(f"Respaldo automatico: {os.path.basename(txt)}")
-            except Exception:
-                pass
-
-        elif etapa == "contactos":
-            self.registros = datos or self.registros
+        elif etapa == "todo":
+            registros, rutas = datos
+            self.registros = registros
+            self.rutas = rutas
             self._resumir()
             self.barra.hide()
-            self._habilitar(self.b_contactos, True)
-            self.b_contactos.setText("Reintentar fichas faltantes")
-            self.pie.setText("Fichas consultadas. Ya puedes guardar.")
+
+            self.paso.setText("Listo  ·  Los archivos ya estan guardados")
+            self.b_todo.setText("Descargar otra vez")
+            self._habilitar(self.b_todo, True)
+            self._habilitar(self.b_guardar, True)
+            self.pie.setText(f"{len(self.registros)} drivers guardados")
+            self._avisar_final(registros, rutas)
+
+    def _avisar_final(self, registros, rutas):
+        """Cuadro final con el resumen y el acceso a la carpeta."""
+        conteo = {}
+        for r in registros:
+            c = r.get("estatus") or "Sin estatus"
+            conteo[c] = conteo.get(c, 0) + 1
+
+        n_tel = sum(1 for r in registros if r.get("telefono"))
+        n_vacios = sum(
+            1
+            for r in registros
+            if not r.get("nombre") and not r.get("curp")
+            and r.get("id") and r["id"] != "0"
+        )
+
+        lineas = [f"{c}: {conteo[c]}" for c in sorted(conteo, key=lambda k: -conteo[k])]
+        detalle = f"{n_tel} con telefono."
+        if n_vacios:
+            detalle += (
+                f"\n{n_vacios} registros vienen vacios desde Mercado Libre "
+                "(sin nombre ni CURP)."
+            )
+
+        caja = QMessageBox(self)
+        caja.setWindowTitle("Descarga completa")
+        caja.setIcon(QMessageBox.Information)
+        caja.setText(
+            f"Se descargaron {len(registros)} drivers.\n\n" + "\n".join(lineas)
+        )
+        caja.setInformativeText(
+            f"{detalle}\n\n"
+            f"{os.path.basename(rutas[0])}\n{os.path.basename(rutas[1])}"
+        )
+        abrir = caja.addButton("Abrir carpeta", QMessageBox.AcceptRole)
+        caja.addButton("Cerrar", QMessageBox.RejectRole)
+        caja.exec()
+
+        if caja.clickedButton() is abrir:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(rutas[0])))
 
     def al_fallar(self, mensaje):
         QApplication.restoreOverrideCursor()
         self.barra.hide()
         self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
-        for b in (self.b_abrir, self.b_extraer, self.b_contactos, self.b_guardar):
-            if b.property("listo") is True or b is self.b_abrir:
+        self.b_abrir.setEnabled(True)
+        self.b_todo.setText("2 · Descargar TODO")
+        for b in (self.b_todo, self.b_guardar):
+            if b.property("listo") is True:
                 b.setEnabled(True)
         QMessageBox.warning(self, "Algo salio mal", mensaje)
         self.pie.setText("Ocurrio un error, revisa el registro")
 
+    # Color por estatus; lo que no este aqui usa gris
+    COLORES = {
+        "Activo": VERDE,
+        "Bloqueado": ROJO,
+        "Inactivo": "#ff9500",
+        "Registro pendiente": "#a78bfa",
+        "Invitacion vencida": "#a78bfa",
+        "Pausado": "#ff9500",
+    }
+
     def _resumir(self):
         r = self.registros
         self.t_total.poner(len(r))
-        self.t_activos.poner(sum(1 for x in r if x.get("estatus") == "Activo"))
-        self.t_bloqueados.poner(
-            sum(1 for x in r if x.get("estatus") == "Bloqueado")
-        )
         self.t_telefonos.poner(sum(1 for x in r if x.get("telefono")))
+
+        conteo = {}
+        for x in r:
+            clave = x.get("estatus") or "Sin estatus"
+            conteo[clave] = conteo.get(clave, 0) + 1
+
+        # Una tarjeta por estatus, del mas numeroso al menos
+        orden = sorted(conteo, key=lambda k: -conteo[k])
+        for clave in orden:
+            if clave not in self.tarjetas:
+                self.tarjetas[clave] = Tarjeta(clave, self.COLORES.get(clave, SUAVE))
+            self.tarjetas[clave].poner(conteo[clave])
+
+        for i in reversed(range(self.rejilla.count())):
+            self.rejilla.itemAt(i).widget().setParent(None)
+
+        widgets = [self.t_total, self.t_telefonos] + [self.tarjetas[c] for c in orden]
+        for i, w in enumerate(widgets):      # 4 por fila para que no se aplasten
+            self.rejilla.addWidget(w, i // 4, i % 4)
+
+        # El desglose por escrito: se ve que las partes suman el total
+        if conteo:
+            partes = "  ".join(f"{c}: {conteo[c]}" for c in orden)
+            self.escribir(f"Desglose  ->  {partes}   (total {len(r)})")
 
     def closeEvent(self, evento):
         # Avisa al trabajador que se detenga en el proximo lote
