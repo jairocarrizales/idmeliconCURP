@@ -164,6 +164,23 @@ el servidor empiece a limitar peticiones.
 El listado se guarda a disco **antes** de este paso, así que una interrupción no
 cuesta lo ya obtenido.
 
+**Reintentos.** Alguna ficha falla por intermitencia de red. Las que no responden
+se reintentan hasta 2 veces más, en lotes más chicos y con pausas mayores.
+
+### Por qué la columna Teléfono no se llena al 100%
+
+En una corrida real: 1,648 teléfonos de 2,025 registros. Eso **no** significa que
+falten datos — hay dos causas distintas y conviene no confundirlas:
+
+| Situación | Cantidad | Qué pasó |
+|---|---:|---|
+| Tiene e-mail pero no teléfono | 357 | La ficha se leyó bien; ese driver **no tiene teléfono cargado** en MELI |
+| Sin e-mail ni teléfono | 20 | La ficha **no respondió** — esto sí es un fallo, y es lo que los reintentos atacan |
+| Invitación pendiente (ID 0) | 1 | No tiene ficha que consultar |
+
+El resumen final los reporta por separado, para que un número menor a 100% no se
+lea como un error cuando no lo es.
+
 **Versión HTML** — intenta sacar el ID del enlace de cada fila; si el listado no
 los expone (que es el caso hoy), recurre al menú de 3 puntos, abriendo perfil por
 perfil. Ese modo es lento y **solo alcanza las filas visibles tras volver a la

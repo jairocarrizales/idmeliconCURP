@@ -43,6 +43,8 @@ API_PERFIL = "https://envios.adminml.com/logistics/provider-management/api/drive
 LOTE_PERFILES = 12
 # Pausa entre lotes de fichas (la de paginacion es distinta)
 PAUSA_PERFILES = 0.2
+# Vueltas extra sobre las fichas que no respondieron a la primera
+REINTENTOS = 2
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -369,17 +371,16 @@ def completar_contactos(driver, registros):
 
     log(f"Consultando {total} fichas en lotes de {LOTE_PERFILES}...")
     por_id = {r["id"]: r for r in pendientes}
-    hechos = fallidos = 0
+    leidos = set()
     inicio = time.time()
 
-    for i in range(0, total, LOTE_PERFILES):
-        lote = [r["id"] for r in pendientes[i:i + LOTE_PERFILES]]
+    def procesar(lote):
+        """Pide un lote y vuelca lo que llegue. Devuelve los ids que fallaron."""
         try:
             datos = pedir_lote_perfiles(driver, lote)
         except Exception as e:
-            fallidos += len(lote)
-            log(f"  Lote {i // LOTE_PERFILES + 1}: fallo ({str(e)[:70]})")
-            continue
+            log(f"  Lote fallido: {str(e)[:70]}")
+            return list(lote)
 
         for id_str, campos in datos.items():
             reg = por_id.get(id_str)
@@ -390,9 +391,15 @@ def completar_contactos(driver, registros):
             # El motivo del bloqueo tampoco viene en el listado
             if campos["motivo"] and not reg.get("observacion"):
                 reg["observacion"] = campos["motivo"]
-            hechos += 1
+            leidos.add(id_str)
 
-        fallidos += len(lote) - len(datos)
+        return [i for i in lote if i not in datos]
+
+    # --- Primera pasada ---
+    faltantes = []
+    for i in range(0, total, LOTE_PERFILES):
+        lote = [r["id"] for r in pendientes[i:i + LOTE_PERFILES]]
+        faltantes.extend(procesar(lote))
 
         procesados = min(i + LOTE_PERFILES, total)
         if procesados % 120 < LOTE_PERFILES or procesados == total:
@@ -406,7 +413,32 @@ def completar_contactos(driver, registros):
 
         time.sleep(PAUSA_PERFILES)
 
-    log(f"Fichas leidas: {hechos}. Sin respuesta: {fallidos}.")
+    # --- Reintentos: una ficha puede fallar por una intermitencia de red ---
+    for vuelta in range(1, REINTENTOS + 1):
+        if not faltantes:
+            break
+        log(f"Reintento {vuelta}: {len(faltantes)} fichas sin respuesta...")
+        time.sleep(1.5)                      # darle aire al servidor
+        quedan = []
+        # Lotes mas chicos: si algo esta saturado, conviene no insistir fuerte
+        paso = max(3, LOTE_PERFILES // 2)
+        for i in range(0, len(faltantes), paso):
+            quedan.extend(procesar(faltantes[i:i + paso]))
+            time.sleep(PAUSA_PERFILES * 2)
+        recuperadas = len(faltantes) - len(quedan)
+        log(f"  Recuperadas {recuperadas}, siguen sin responder {len(quedan)}.")
+        faltantes = quedan
+
+    # --- Resumen honesto ---
+    sin_tel = sum(
+        1 for r in pendientes if not r.get("telefono") and r.get("email")
+    )
+    log(f"Fichas leidas: {len(leidos)}/{total}.")
+    if sin_tel:
+        log(f"  De esas, {sin_tel} no tienen telefono cargado en MELI.")
+    if faltantes:
+        log(f"  {len(faltantes)} fichas no respondieron tras {REINTENTOS} reintentos.")
+        log(f"  IDs: {', '.join(faltantes[:12])}{' ...' if len(faltantes) > 12 else ''}")
 
 
 def guardar(registros):
@@ -572,6 +604,27 @@ def main():
         print(f"    Con telefono             {n_tel}/{len(registros)}")
         print(f"    Con e-mail               {n_mail}/{len(registros)}")
         print()
+
+        # Distinguir "la ficha no respondio" de "el driver no tiene telefono"
+        if n_mail:
+            sin_dato = sum(
+                1 for r in registros if not r.get("telefono") and r.get("email")
+            )
+            sin_ficha = sum(
+                1
+                for r in registros
+                if not r.get("telefono")
+                and not r.get("email")
+                and r.get("id")
+                and r["id"] != "0"
+            )
+            if sin_dato:
+                print(f"    {sin_dato} drivers no tienen telefono cargado en MELI")
+                print("    (su ficha si se leyo: trajo e-mail)")
+            if sin_ficha:
+                print(f"    {sin_ficha} fichas no respondieron; vuelve a correr")
+                print("    el programa para reintentarlas.")
+            print()
         if not n_tel:
             print("    Nota: el telefono y el e-mail solo estan en la ficha")
             print("    individual. Vuelve a correr el programa y responde 's'")
