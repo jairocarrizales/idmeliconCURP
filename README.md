@@ -201,11 +201,24 @@ falten datos — hay dos causas distintas y conviene no confundirlas:
 | Situación | Cantidad | Qué pasó |
 |---|---:|---|
 | Tiene e-mail pero no teléfono | 357 | La ficha se leyó bien; ese driver **no tiene teléfono cargado** en MELI |
-| Sin e-mail ni teléfono | 20 | La ficha **no respondió** — esto sí es un fallo, y es lo que los reintentos atacan |
+| Registro vacío en MELI | 19 | Solo tiene ID y fecha — **sin nombre, CURP, teléfono ni correo** |
 | Invitación pendiente (ID 0) | 1 | No tiene ficha que consultar |
 
 El resumen final los reporta por separado, para que un número menor a 100% no se
 lea como un error cuando no lo es.
+
+### Registros vacíos: no son un fallo del extractor
+
+Hay drivers que en el panel de Mercado Libre **aparecen como una fila en blanco**:
+tienen ID, tipo y fecha, pero el nombre y la CURP están vacíos en el origen.
+
+Se puede comprobar a simple vista en el panel — la fila se ve sin texto donde
+deberían ir el nombre y la CURP.
+
+El extractor los conserva (existen, y su ID es válido) y les pone
+`Sin datos en Mercado Libre` en la columna Observación, para distinguirlos de
+una extracción incompleta. Tampoco se cuentan como fichas fallidas ni se
+reintentan: no hay nada que traer.
 
 **Versión HTML** — intenta sacar el ID del enlace de cada fila; si el listado no
 los expone (que es el caso hoy), recurre al menú de 3 puntos, abriendo perfil por

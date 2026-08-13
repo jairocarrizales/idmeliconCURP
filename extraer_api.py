@@ -262,12 +262,19 @@ def normalizar(item):
     else:
         curp = limpiar(item.get("identificationValue")).upper()
 
+    # Hay registros que en MELI existen pero estan vacios: solo traen id y
+    # fecha, sin nombre ni CURP. Se marcan para no confundirlos con un fallo
+    # de extraccion (en el panel tambien se ven como una fila en blanco).
+    observacion = motivo_bloqueo(item.get("blockingReason"))
+    if not nombre and not curp and item.get("id"):
+        observacion = observacion or "Sin datos en Mercado Libre"
+
     return {
         "id": limpiar(item.get("id")),
         "nombre": nombre,
         "curp": curp,
         "estatus": estatus,
-        "observacion": motivo_bloqueo(item.get("blockingReason")),
+        "observacion": observacion,
         "telefono": limpiar(item.get("phone") or item.get("phoneNumber") or ""),
         "email": email,
         "tipo": "Ayudante" if item.get("isOnlyHelper") else "Transportista",
@@ -437,8 +444,22 @@ def completar_contactos(driver, registros):
     if sin_tel:
         log(f"  De esas, {sin_tel} no tienen telefono cargado en MELI.")
     if faltantes:
-        log(f"  {len(faltantes)} fichas no respondieron tras {REINTENTOS} reintentos.")
-        log(f"  IDs: {', '.join(faltantes[:12])}{' ...' if len(faltantes) > 12 else ''}")
+        # Distinguir los registros vacios de MELI de un fallo real de red
+        por_vacio = [
+            i
+            for i in faltantes
+            if not por_id[i].get("nombre") and not por_id[i].get("curp")
+        ]
+        reales = [i for i in faltantes if i not in por_vacio]
+
+        if por_vacio:
+            log(
+                f"  {len(por_vacio)} registros estan vacios en MELI "
+                "(sin nombre ni CURP); no hay ficha que leer."
+            )
+        if reales:
+            log(f"  {len(reales)} fichas no respondieron tras {REINTENTOS} reintentos.")
+            log(f"  IDs: {', '.join(reales[:12])}{' ...' if len(reales) > 12 else ''}")
 
 
 def guardar(registros):
@@ -618,9 +639,21 @@ def main():
                 and r.get("id")
                 and r["id"] != "0"
             )
+            # Los registros vacios en MELI no son fichas fallidas
+            vacios = sum(
+                1
+                for r in registros
+                if not r.get("nombre") and not r.get("curp") and r.get("id")
+                and r["id"] != "0"
+            )
+            sin_ficha = max(0, sin_ficha - vacios)
+
             if sin_dato:
                 print(f"    {sin_dato} drivers no tienen telefono cargado en MELI")
                 print("    (su ficha si se leyo: trajo e-mail)")
+            if vacios:
+                print(f"    {vacios} registros estan vacios en MELI: solo tienen")
+                print("    ID y fecha. En el panel se ven como filas en blanco.")
             if sin_ficha:
                 print(f"    {sin_ficha} fichas no respondieron; vuelve a correr")
                 print("    el programa para reintentarlas.")
