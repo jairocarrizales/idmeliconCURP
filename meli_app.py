@@ -8,7 +8,7 @@ El registro de actividad se ve en un panel dentro de la misma ventana.
 Flujo:
   1. "Abrir Mercado Libre"  -> lanza Chrome en la pagina de drivers
   2. Inicias sesion a mano
-  3. "Descargar TODO"       -> listado, telefonos y guardado, de una vez
+  3. "Extraer TODO"         -> listado, telefonos y guardado, de una vez
 """
 
 import os
@@ -125,7 +125,7 @@ class Trabajador(QObject):
                 return
 
             # --- 1) Listado ---
-            self.log("Paso 1 de 3: descargando la lista de drivers...")
+            self.log("Paso 1 de 3: extrayendo la lista de drivers...")
             inicio = time.time()
             self.registros = nucleo.extraer_todo(self.driver)
 
@@ -247,21 +247,21 @@ class Trabajador(QObject):
                     "1. Ve a la ventana de Chrome que abrio el programa\n"
                     "2. Asegurate de estar en la LISTA DE TRANSPORTISTAS\n"
                     "   (envios.adminml.com/logistics/provider-management/drivers)\n"
-                    "3. Presiona otra vez 'Descargar TODO'"
+                    "3. Presiona otra vez 'Extraer TODO'"
                 )
                 return False
             if "401" in texto or "403" in texto or "no devolvio json" in texto:
                 self.puente.fallo.emit(
                     "Tu sesion de Mercado Libre no esta activa.\n\n"
                     "Inicia sesion en la ventana de Chrome y vuelve a "
-                    "presionar 'Descargar TODO'."
+                    "presionar 'Extraer TODO'."
                 )
                 return False
 
         self.puente.fallo.emit(
             "No se pudo consultar la lista de drivers.\n\n"
             "Revisa que en Chrome se vea la lista de transportistas y que "
-            "tu sesion siga abierta, luego presiona otra vez 'Descargar TODO'."
+            "tu sesion siga abierta, luego presiona otra vez 'Extraer TODO'."
         )
         return False
 
@@ -310,7 +310,7 @@ class Trabajador(QObject):
             return (
                 "La sesion de Mercado Libre caduco.\n\n"
                 "Inicia sesion otra vez en la ventana de Chrome y vuelve a "
-                "presionar 'Descargar TODO'."
+                "presionar 'Extraer TODO'."
             )
         return texto[:400] if texto else type(e).__name__
 
@@ -325,18 +325,18 @@ class Tarjeta(QFrame):
             f" border-radius: 8px; }}"
         )
         caja = QVBoxLayout(self)
-        caja.setContentsMargins(14, 10, 14, 10)
-        caja.setSpacing(2)
+        caja.setContentsMargins(8, 5, 8, 5)
+        caja.setSpacing(0)
 
         self.valor = QLabel("-")
         f = QFont()
-        f.setPointSize(20)
+        f.setPointSize(13)
         f.setBold(True)
         self.valor.setFont(f)
         self.valor.setStyleSheet(f"color: {color}; border: none;")
 
         self.texto = QLabel(etiqueta)
-        self.texto.setStyleSheet(f"color: {SUAVE}; font-size: 11px; border: none;")
+        self.texto.setStyleSheet(f"color: {SUAVE}; font-size: 9px; border: none;")
 
         caja.addWidget(self.valor)
         caja.addWidget(self.texto)
@@ -349,7 +349,8 @@ class Ventana(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Extractor de Drivers - Mercado Libre")
-        self.resize(880, 660)
+        self.resize(560, 400)
+        self.setMinimumSize(460, 340)
         self.registros = []
         self.rutas = None
 
@@ -362,28 +363,28 @@ class Ventana(QMainWindow):
         self.setCentralWidget(central)
         central.setStyleSheet(f"background: {FONDO};")
         raiz = QVBoxLayout(central)
-        raiz.setContentsMargins(22, 18, 22, 18)
-        raiz.setSpacing(14)
+        raiz.setContentsMargins(12, 10, 12, 10)
+        raiz.setSpacing(7)
 
         # --- encabezado ---
         titulo = QLabel("Extractor de Drivers")
         f = QFont()
-        f.setPointSize(19)
+        f.setPointSize(13)
         f.setBold(True)
         titulo.setFont(f)
         titulo.setStyleSheet(f"color: {TEXTO};")
         raiz.addWidget(titulo)
 
         self.paso = QLabel("Paso 1 de 2  ·  Abre Mercado Libre e inicia sesion")
-        self.paso.setStyleSheet(f"color: {AMARILLO}; font-size: 13px;")
+        self.paso.setStyleSheet(f"color: {AMARILLO}; font-size: 11px;")
         raiz.addWidget(self.paso)
 
         # --- botones ---
         fila = QHBoxLayout()
-        fila.setSpacing(10)
+        fila.setSpacing(7)
 
         self.b_abrir = self._boton("1 · Abrir Mercado Libre", AZUL, True)
-        self.b_todo = self._boton("2 · Descargar TODO", VERDE)
+        self.b_todo = self._boton("2 · Extraer TODO", VERDE)
         self.b_guardar = self._boton("Abrir carpeta", AMARILLO)
 
         self.b_abrir.clicked.connect(self.al_abrir)
@@ -405,7 +406,7 @@ class Ventana(QMainWindow):
         # Se arman al vuelo segun los estatus que traiga la extraccion, para
         # que las categorias siempre sumen el total y no quede nada fuera.
         self.rejilla = QGridLayout()
-        self.rejilla.setSpacing(10)
+        self.rejilla.setSpacing(6)
         self.tarjetas = {}          # estatus -> Tarjeta
 
         self.t_total = Tarjeta("Drivers", TEXTO)
@@ -417,46 +418,43 @@ class Ventana(QMainWindow):
         # --- barra de avance ---
         self.barra = QProgressBar()
         self.barra.setTextVisible(True)
-        self.barra.setFixedHeight(22)
+        self.barra.setFixedHeight(15)
         self.barra.setStyleSheet(
             f"QProgressBar {{ background: {PANEL}; border: 1px solid {BORDE};"
-            f" border-radius: 5px; color: {TEXTO}; font-size: 11px; }}"
-            f"QProgressBar::chunk {{ background: {AZUL}; border-radius: 4px; }}"
+            f" border-radius: 4px; color: {TEXTO}; font-size: 9px; }}"
+            f"QProgressBar::chunk {{ background: {AZUL}; border-radius: 3px; }}"
         )
         self.barra.hide()
         raiz.addWidget(self.barra)
 
         # --- registro ---
-        etiqueta = QLabel("Registro de actividad")
-        etiqueta.setStyleSheet(f"color: {SUAVE}; font-size: 11px;")
-        raiz.addWidget(etiqueta)
-
         self.registro = QPlainTextEdit()
         self.registro.setReadOnly(True)
+        self.registro.setMinimumHeight(90)
         self.registro.setStyleSheet(
             f"QPlainTextEdit {{ background: #16181d; color: #b9c0cb;"
-            f" border: 1px solid {BORDE}; border-radius: 8px; padding: 10px;"
-            f" font-family: Consolas, monospace; font-size: 12px; }}"
+            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 6px;"
+            f" font-family: Consolas, monospace; font-size: 10px; }}"
         )
         raiz.addWidget(self.registro, 1)
 
         # --- pie ---
         self.pie = QLabel("Listo para empezar")
-        self.pie.setStyleSheet(f"color: {SUAVE}; font-size: 11px;")
+        self.pie.setStyleSheet(f"color: {SUAVE}; font-size: 10px;")
         raiz.addWidget(self.pie)
 
     def _boton(self, texto, color, principal=False):
         b = QPushButton(texto)
         b.setCursor(Qt.PointingHandCursor)
-        b.setMinimumHeight(42)
+        b.setMinimumHeight(30)
         b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         letra = "#1e2128" if color in (AMARILLO,) else "#ffffff"
         if color == PANEL:
             letra = TEXTO
         b.setStyleSheet(
             f"QPushButton {{ background: {color}; color: {letra};"
-            f" border: none; border-radius: 8px; font-size: 13px;"
-            f" font-weight: 600; padding: 0 14px; }}"
+            f" border: none; border-radius: 6px; font-size: 11px;"
+            f" font-weight: 600; padding: 0 8px; }}"
             f"QPushButton:hover {{ background: {color}; opacity: 0.9; }}"
             f"QPushButton:disabled {{ background: #2c3038; color: #5a616d; }}"
         )
@@ -509,9 +507,9 @@ class Ventana(QMainWindow):
 
     def al_descargar_todo(self):
         self.b_todo.setEnabled(False)
-        self.b_todo.setText("Descargando...")
-        self.pie.setText("Descargando todo. Puedes seguir usando la PC.")
-        self.escribir("Iniciando descarga completa...")
+        self.b_todo.setText("Extrayendo...")
+        self.pie.setText("Extrayendo. Puedes seguir usando la PC.")
+        self.escribir("Iniciando extraccion completa...")
         self.ordenes.todo.emit()
 
     def al_guardar(self):
@@ -525,7 +523,7 @@ class Ventana(QMainWindow):
 
         if etapa == "navegador":
             self.paso.setText(
-                "Paso 2 de 2  ·  Inicia sesion en Chrome y presiona 'Descargar TODO'"
+                "Paso 2 de 2  ·  Inicia sesion en Chrome y presiona 'Extraer TODO'"
             )
             self._habilitar(self.b_todo, True)
             self.b_abrir.setText("Reabrir Chrome")
@@ -537,7 +535,7 @@ class Ventana(QMainWindow):
             self.registros = datos or []
             self._resumir()
             self.pie.setText(
-                f"{len(self.registros)} drivers descargados. Trayendo telefonos..."
+                f"{len(self.registros)} drivers extraidos. Trayendo telefonos..."
             )
 
         elif etapa == "todo":
@@ -548,7 +546,7 @@ class Ventana(QMainWindow):
             self.barra.hide()
 
             self.paso.setText("Listo  ·  Los archivos ya estan guardados")
-            self.b_todo.setText("Descargar otra vez")
+            self.b_todo.setText("Extraer otra vez")
             self._habilitar(self.b_todo, True)
             self._habilitar(self.b_guardar, True)
             self.pie.setText(f"{len(self.registros)} drivers guardados")
@@ -562,26 +560,14 @@ class Ventana(QMainWindow):
             conteo[c] = conteo.get(c, 0) + 1
 
         n_tel = sum(1 for r in registros if r.get("telefono"))
-        n_vacios = sum(
-            1
-            for r in registros
-            if not r.get("nombre") and not r.get("curp")
-            and r.get("id") and r["id"] != "0"
-        )
-
         lineas = [f"{c}: {conteo[c]}" for c in sorted(conteo, key=lambda k: -conteo[k])]
         detalle = f"{n_tel} con telefono."
-        if n_vacios:
-            detalle += (
-                f"\n{n_vacios} registros vienen vacios desde Mercado Libre "
-                "(sin nombre ni CURP)."
-            )
 
         caja = QMessageBox(self)
-        caja.setWindowTitle("Descarga completa")
+        caja.setWindowTitle("Extraccion completa")
         caja.setIcon(QMessageBox.Information)
         caja.setText(
-            f"Se descargaron {len(registros)} drivers.\n\n" + "\n".join(lineas)
+            f"Se extrajeron {len(registros)} drivers.\n\n" + "\n".join(lineas)
         )
         caja.setInformativeText(
             f"{detalle}\n\n"
@@ -599,7 +585,7 @@ class Ventana(QMainWindow):
         self.barra.hide()
         self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
         self.b_abrir.setEnabled(True)
-        self.b_todo.setText("2 · Descargar TODO")
+        self.b_todo.setText("2 · Extraer TODO")
         for b in (self.b_todo, self.b_guardar):
             if b.property("listo") is True:
                 b.setEnabled(True)
@@ -637,8 +623,8 @@ class Ventana(QMainWindow):
             self.rejilla.itemAt(i).widget().setParent(None)
 
         widgets = [self.t_total, self.t_telefonos] + [self.tarjetas[c] for c in orden]
-        for i, w in enumerate(widgets):      # 4 por fila para que no se aplasten
-            self.rejilla.addWidget(w, i // 4, i % 4)
+        for i, w in enumerate(widgets):      # 3 por fila: la ventana es angosta
+            self.rejilla.addWidget(w, i // 3, i % 3)
 
         # El desglose por escrito: se ve que las partes suman el total
         if conteo:

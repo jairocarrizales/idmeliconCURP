@@ -328,11 +328,26 @@ def extraer_todo(driver):
     if pagina >= MAX_PAGINAS:
         log(f"AVISO: se alcanzo el tope de {MAX_PAGINAS} paginas.")
 
-    # Numerar al final
-    for i, r in enumerate(registros, start=1):
+    # Descartar lo que no sirve para un padron limpio:
+    #  - id 0 o vacio: invitaciones pendientes, no son drivers todavia
+    #  - sin nombre NI CURP: registros vacios en MELI (filas en blanco)
+    utiles, descartados = [], 0
+    for r in registros:
+        sin_id = not r.get("id") or r["id"] == "0"
+        sin_datos = not r.get("nombre") and not r.get("curp")
+        if sin_id or sin_datos:
+            descartados += 1
+            continue
+        utiles.append(r)
+
+    if descartados:
+        log(f"Se omitieron {descartados} registros sin ID o sin datos.")
+
+    # Numerar al final (el numero se usa internamente, no se exporta)
+    for i, r in enumerate(utiles, start=1):
         r["n"] = i
 
-    return registros
+    return utiles
 
 
 def pedir_lote_perfiles(driver, ids):
@@ -468,29 +483,23 @@ def guardar(registros):
     ruta_csv = os.path.join(BASE_DIR, f"drivers_meli_{sello}.csv")
 
     encabezados = [
-        "#",
         "ID",
         "Nombre",
         "CURP",
         "Estatus",
-        "Observacion",
         "Telefono",
         "E-mail",
-        "Tipo",
         "Fecha creacion",
     ]
 
     def campos(r):
         return [
-            str(r.get("n", "")),
             r.get("id", ""),
             r.get("nombre", ""),
             r.get("curp", ""),
             r.get("estatus", ""),
-            r.get("observacion", ""),
             r.get("telefono", ""),
             r.get("email", ""),
-            r.get("tipo", ""),
             r.get("fecha", ""),
         ]
 
@@ -639,21 +648,9 @@ def main():
                 and r.get("id")
                 and r["id"] != "0"
             )
-            # Los registros vacios en MELI no son fichas fallidas
-            vacios = sum(
-                1
-                for r in registros
-                if not r.get("nombre") and not r.get("curp") and r.get("id")
-                and r["id"] != "0"
-            )
-            sin_ficha = max(0, sin_ficha - vacios)
-
             if sin_dato:
                 print(f"    {sin_dato} drivers no tienen telefono cargado en MELI")
                 print("    (su ficha si se leyo: trajo e-mail)")
-            if vacios:
-                print(f"    {vacios} registros estan vacios en MELI: solo tienen")
-                print("    ID y fecha. En el panel se ven como filas en blanco.")
             if sin_ficha:
                 print(f"    {sin_ficha} fichas no respondieron; vuelve a correr")
                 print("    el programa para reintentarlas.")

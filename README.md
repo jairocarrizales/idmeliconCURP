@@ -47,7 +47,7 @@ Ejecuta **`DriversMeli.exe`**. Son dos clics:
 | Botón | Qué hace |
 |---|---|
 | **1 · Abrir Mercado Libre** | Lanza Chrome — ahí inicias sesión |
-| **2 · Descargar TODO** | Listado + teléfonos + guardado, de corrido |
+| **2 · Extraer TODO** | Listado + teléfonos + guardado, de corrido |
 
 El segundo botón hace el trabajo completo sin pedir nada más: descarga los
 ~2,000 drivers, consulta las fichas para traer teléfono, correo y motivo de
@@ -132,13 +132,23 @@ correctamente, sin signos raros.
 ### Columnas
 
 ```
-# | ID | Nombre | CURP | Estatus | Observación | Teléfono | E-mail | Tipo | Fecha creación
+ID | Nombre | CURP | Estatus | Teléfono | E-mail | Fecha creación
 ```
 
-`Estatus` trae el estado principal (`Activo`, `Bloqueado`, …) y `Observación`
-la nota que a veces lo acompaña (`Falta leve`, `Rehacer capacitación`).
+`Estatus` trae el estado (`Activo`, `Bloqueado`, `Inactivo`, …).
 
-`Teléfono` y `E-mail` solo se llenan si aceptas el paso de abrir perfiles.
+### Qué se descarta
+
+Para que el padrón salga limpio, **no se exportan**:
+
+- Registros con **ID 0 o vacío** — son invitaciones enviadas, todavía no drivers
+- Registros **sin nombre ni CURP** — en el panel se ven como filas en blanco
+
+En una corrida típica son unos 20 de 2,026. La consola avisa cuántos omitió:
+
+```
+Se omitieron 20 registros sin ID o sin datos.
+```
 
 Al terminar, la consola imprime un resumen: conteo por estatus y cuántos
 registros quedaron con ID, teléfono y e-mail.
