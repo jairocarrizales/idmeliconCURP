@@ -51,6 +51,15 @@ def log(msg):
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
+def resumir_error(e):
+    """Selenium escupe stacktraces enormes; nos quedamos con lo util."""
+    texto = str(e).split("Stacktrace:")[0].strip()
+    texto = " ".join(texto.split())
+    if not texto:
+        texto = type(e).__name__
+    return texto[:160]
+
+
 def limpiar(texto):
     """Normaliza el texto: quita saltos de linea, tabs y espacios sobrantes."""
     if not texto:
@@ -487,6 +496,48 @@ def abrir_perfiles(driver, registros, solo_faltantes=True):
     return registros
 
 
+def buscar_opcion_menu(driver, texto):
+    """Encuentra la opcion clickeable de un menu flotante por su texto.
+
+    El markup de Andes pone el <button> vacio y el texto en un <div> hermano:
+        <li class="andes-list__item">
+          <button class="andes-list__item-actionable"></button>
+          <div class="andes-list__item-first-column">Ver Perfil</div>
+        </li>
+    Asi que localizamos el <li> por su texto y devolvemos su boton (o el <li>
+    mismo, que tambien recibe el clic).
+    """
+    texto_bajo = texto.lower()
+
+    for li in driver.find_elements(By.CSS_SELECTOR, "li.andes-list__item"):
+        try:
+            if not li.is_displayed():
+                continue
+            if texto_bajo not in (li.text or "").lower():
+                continue
+            botones = li.find_elements(
+                By.CSS_SELECTOR, "button.andes-list__item-actionable"
+            )
+            if botones:
+                return botones[0]
+            return li
+        except StaleElementReferenceException:
+            continue
+
+    # Respaldo: cualquier elemento visible del menu que contenga el texto
+    try:
+        for el in driver.find_elements(
+            By.XPATH,
+            f"//*[contains(@class,'andes-list__item') and contains(., '{texto}')]",
+        ):
+            if el.is_displayed():
+                return el
+    except Exception:
+        pass
+
+    return None
+
+
 def abrir_perfiles_por_menu(driver, registros):
     """Plan B: si el listado no expone el ID, entra por el menu de 3 puntos.
 
@@ -524,15 +575,12 @@ def abrir_perfiles_por_menu(driver, registros):
             driver.execute_script("arguments[0].click();", boton)
             time.sleep(0.6)
 
-            # "Ver Perfil" es la primera opcion del menu flotante
+            # "Ver Perfil" es la primera opcion del menu flotante.
+            # OJO: el <button class="andes-list__item-actionable"> viene VACIO;
+            # el texto vive en un <div> hermano dentro del mismo <li>. Por eso
+            # buscamos el <li> por su texto y de ahi sacamos su boton.
             opcion = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable(
-                    (
-                        By.XPATH,
-                        "//button[contains(@class,'andes-list__item-actionable')]"
-                        "[.//*[contains(text(),'Ver Perfil')] or contains(.,'Ver Perfil')]",
-                    )
-                )
+                lambda d: buscar_opcion_menu(d, "Ver Perfil")
             )
             driver.execute_script("arguments[0].click();", opcion)
 
@@ -552,7 +600,7 @@ def abrir_perfiles_por_menu(driver, registros):
             )
             time.sleep(0.5)
         except Exception as e:
-            log(f"  Fila {i} ({r['nombre']}): no se pudo abrir el perfil ({e})")
+            log(f"  Fila {i} ({r['nombre']}): no se pudo abrir el perfil - {resumir_error(e)}")
             # Intentar volver a la lista si nos quedamos en el perfil
             try:
                 if "/drivers/edit/" in driver.current_url:

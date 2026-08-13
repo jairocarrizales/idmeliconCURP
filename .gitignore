@@ -6,6 +6,9 @@ drivers_meli_*.txt
 drivers_meli_*.csv
 *.xlsx
 
+# Reportes del descubridor de API (la muestra puede traer datos reales)
+api_encontrada_*.txt
+
 # Build de PyInstaller (el .exe final SI se sube)
 build/
 dist/

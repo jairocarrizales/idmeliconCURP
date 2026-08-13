@@ -87,6 +87,24 @@ si ese es el caso.
 
 ---
 
+## `DescubrirAPI.exe` — encontrar la API de la tabla
+
+Herramienta aparte. **No extrae datos**: observa qué peticiones de red hace la página
+al presionar "Mostrar más", para localizar el endpoint que alimenta la tabla.
+
+Si esa API existe, permitiría traer todos los drivers —con ID, teléfono y e-mail
+incluidos— en segundos, en lugar de abrir cientos de perfiles.
+
+**Uso:** ejecútalo, inicia sesión, presiona ENTER. Genera un
+`api_encontrada_AAAAMMDD_HHMMSS.txt` con las URLs candidatas ordenadas por
+probabilidad y una muestra de cada respuesta.
+
+El reporte **no incluye cookies ni tokens** — solo URLs, método, tipo de contenido
+y un fragmento del cuerpo. Aun así, revísalo antes de compartirlo, porque la muestra
+de la respuesta puede contener datos de drivers.
+
+---
+
 ## Correr desde el código fuente
 
 ```bash
