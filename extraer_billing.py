@@ -416,17 +416,15 @@ def guardar(filas, id_pref):
     ruta_csv = os.path.join(BASE_DIR, base + ".csv")
 
     cab = [
-        "ID ruta", "ID usuario", "Nombre", "CURP", "Estatus", "Telefono",
-        "E-mail", "Placa", "Concepto", "Tipo", "Fecha inicio", "Fecha fin",
-        "Cantidad", "Costo", "Total",
+        "ID ruta", "ID usuario", "Nombre", "Placa", "Concepto", "Tipo",
+        "Fecha inicio", "Fecha fin", "Cantidad", "Costo", "Total",
     ]
 
     def campos(f):
         return [
             f.get("ruta", ""), f.get("id_usuario", ""), f.get("nombre", ""),
-            f.get("curp", ""), f.get("estatus", ""), f.get("telefono", ""),
-            f.get("email", ""), f.get("placa", ""), f.get("concepto", ""),
-            f.get("tipo", ""), f.get("fecha_ini", ""), f.get("fecha_fin", ""),
+            f.get("placa", ""), f.get("concepto", ""), f.get("tipo", ""),
+            f.get("fecha_ini", ""), f.get("fecha_fin", ""),
             f.get("cantidad", ""), f.get("costo", ""), f.get("total", ""),
         ]
 

@@ -554,25 +554,25 @@ sesión, escribe el número de prefactura y presiona **2 · Extraer TODO**.
 El período se deduce solo: `202607Q1` → del 1 al 15 de julio, así que pide el
 reporte de operación del rango correcto sin que tú elijas fechas.
 
-**No hace falta preparar nada antes.** El padrón se baja de MELI en cada
-corrida (~15 s), así que un driver contratado ayer trae su CURP igual. Si esa
-bajada fallara, usa como respaldo el `drivers_meli_*.txt` más reciente que
-encuentre en la carpeta.
+**No hace falta preparar nada antes.** El ID de usuario sale del reporte de
+operación, no del padrón, así que un driver contratado ayer aparece igual.
 
-Los cuatro pasos que hace por dentro:
+Los tres pasos que hace por dentro, todos por API:
 
 ```
-Paso 1 de 4: bajando el padron de drivers...
-Paso 2 de 4: detalle de la prefactura...
-Paso 3 de 4: reporte de operacion del periodo...
-Paso 4 de 4: cruzando por ID de ruta...
+Paso 1 de 3: detalle de la prefactura...
+Paso 2 de 3: reporte de operacion del periodo...
+Paso 3 de 3: cruzando por ID de ruta...
 ```
+
+Tarda unos 20 segundos. Si además quieres CURP y teléfono, cruza el `ID usuario`
+de este archivo contra el que genera `DriversMeli.exe` — ambos usan el mismo ID.
 
 ### Columnas
 
 ```
-ID ruta | ID usuario | Nombre | CURP | Estatus | Teléfono | E-mail |
-Placa | Concepto | Tipo | Fecha inicio | Fecha fin | Cantidad | Costo | Total
+ID ruta | ID usuario | Nombre | Placa | Concepto | Tipo |
+Fecha inicio | Fecha fin | Cantidad | Costo | Total
 ```
 
 ### Nota sobre el lector de XLSX

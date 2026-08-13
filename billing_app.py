@@ -130,28 +130,8 @@ class Trabajador(QObject):
                 self.driver.get(url)
                 time.sleep(4)
 
-            # 1) Padron fresco: asi los drivers nuevos tambien traen CURP
-            self.log("Paso 1 de 4: bajando el padron de drivers...")
-            padron = {}
-            try:
-                padron = nucleo.bajar_padron(self.driver)
-                self.log(f"  {len(padron)} drivers con sus datos")
-            except Exception as e:
-                self.log(f"  No se pudo bajar el padron: {str(e)[:110]}")
-                padron, ruta_padron = nucleo.cargar_padron()
-                if padron:
-                    self.log(f"  Usando el archivo previo: "
-                             f"{os.path.basename(ruta_padron)} ({len(padron)})")
-                else:
-                    self.log("  AVISO: sin padron, las filas no tendran CURP.")
-
-            # Volver a la prefactura: el padron nos movio de pagina
-            if id_pref not in (self.driver.current_url or ""):
-                self.driver.get(url)
-                time.sleep(3)
-
-            # 2) Detalle de la prefactura
-            self.log("Paso 2 de 4: detalle de la prefactura...")
+            # 1) Detalle de la prefactura
+            self.log("Paso 1 de 3: detalle de la prefactura...")
             filas, periodo, _ = nucleo.bajar_detalle(self.driver, id_pref)
             if not filas:
                 self.puente.fallo.emit(
@@ -170,7 +150,7 @@ class Trabajador(QObject):
                 )
                 return
 
-            self.log("Paso 3 de 4: reporte de operacion del periodo...")
+            self.log("Paso 2 de 3: reporte de operacion del periodo...")
             mapa = {}
             try:
                 mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
@@ -179,7 +159,7 @@ class Trabajador(QObject):
                 self.log("Se continua sin ID de usuario.")
 
             # 3) Cruce por numero de ruta
-            self.log("Paso 4 de 4: cruzando por ID de ruta...")
+            self.log("Paso 3 de 3: cruzando por ID de ruta...")
             con_id = sin_ruta = sin_mapa = 0
             for f in filas:
                 ruta = f.get("ruta", "")
@@ -191,23 +171,17 @@ class Trabajador(QObject):
                     sin_mapa += 1
                     continue
                 f["id_usuario"] = info["id"]
+                f["nombre"] = info["nombre"]
                 con_id += 1
-                datos = padron.get(info["id"])
-                if datos:
-                    f["nombre"] = datos["nombre"]
-                    f["curp"] = datos["curp"]
-                    f["estatus"] = datos["estatus"]
-                    f["telefono"] = datos["telefono"]
-                    f["email"] = datos["email"]
-                else:
-                    f["nombre"] = info["nombre"]
 
             rutas = nucleo.guardar(filas, id_pref)
             self.log(f"Guardado: {os.path.basename(rutas[0])}")
 
             resumen = {
                 "filas": len(filas), "con_id": con_id,
-                "con_curp": sum(1 for f in filas if f.get("curp")),
+                # Cuantas personas distintas aparecen en la prefactura
+                "con_curp": len({f["id_usuario"] for f in filas
+                                 if f.get("id_usuario")}),
                 "sin_ruta": sin_ruta, "sin_mapa": sin_mapa,
                 "periodo": periodo, "desde": desde, "hasta": hasta,
                 "rutas_mapa": len(mapa),
@@ -352,7 +326,7 @@ class Ventana(QMainWindow):
         rejilla.setSpacing(6)
         self.t_lineas = Tarjeta("Lineas", TEXTO)
         self.t_id = Tarjeta("Con ID usuario", VERDE)
-        self.t_curp = Tarjeta("Con CURP", AZUL)
+        self.t_curp = Tarjeta("Conductores", AZUL)
         for i, t in enumerate((self.t_lineas, self.t_id, self.t_curp)):
             rejilla.addWidget(t, 0, i)
         raiz.addLayout(rejilla)
@@ -487,7 +461,7 @@ class Ventana(QMainWindow):
         detalle = [
             f"Periodo {r['periodo']}  ({r['desde']} a {r['hasta']})",
             f"{r['con_id']} lineas con ID de usuario",
-            f"{r['con_curp']} con CURP",
+            f"{r['con_curp']} conductores distintos",
         ]
         if r["sin_mapa"]:
             detalle.append(
