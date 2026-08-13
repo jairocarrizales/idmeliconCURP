@@ -10,7 +10,34 @@ drivers **activos** como de los **bloqueados**. Opcionalmente también
 
 ---
 
-## Uso rápido
+## Cuál usar
+
+| Ejecutable | Qué hace | Tiempo |
+|---|---|---|
+| **`ExtraerDriversAPI.exe`** ⭐ | Consulta directo la API de la tabla. Trae ID, nombre, CURP, estatus y motivo de bloqueo. **Empieza por este.** | segundos |
+| `ExtraerDriversMeli.exe` | Lee el HTML presionando "Mostrar más". Respaldo si la API cambia. | minutos |
+| `DescubrirAPI.exe` | Diagnóstico: encuentra el endpoint si MELI lo mueve. | ~1 min |
+
+---
+
+## Uso rápido (versión API)
+
+1. Ejecuta **`ExtraerDriversAPI.exe`** (doble clic).
+2. Inicia sesión en la ventana de Chrome.
+3. Cuando veas la lista, presiona **ENTER** en la ventana negra.
+4. Listo — pagina la API completa en segundos y guarda los archivos.
+
+La API es
+`/logistics/provider-management/api/drivers/drivers-and-invites`,
+con `status=active,inactive,blocked` y paginación por cursor. El `id` viene
+en cada registro, así que **no hace falta abrir ningún perfil**.
+
+Las llamadas salen del propio navegador (`fetch` con `credentials: 'include'`),
+así que se reusa tu sesión sin extraer ni manipular tokens.
+
+---
+
+## Uso de la versión HTML (respaldo)
 
 1. Ejecuta **`ExtraerDriversMeli.exe`** (doble clic).
 2. Se abre Chrome en la página de drivers → **inicia sesión tú mismo**.
