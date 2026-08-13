@@ -240,8 +240,43 @@ def periodo_a_fechas(periodo):
 
 
 # ------------------------------------------------------------- el padron
+def bajar_padron(driver):
+    """Trae el padron directo de MELI: id -> nombre, CURP, telefono, estatus.
+
+    Se pide en cada corrida en vez de leer un archivo previo: si entro un
+    driver nuevo, su CURP aparece igual, sin tener que acordarse de correr
+    antes el extractor de drivers.
+    """
+    import extraer_api
+
+    # El log del otro modulo va al mismo lado que el nuestro
+    extraer_api.log = log
+
+    # El fetch corre DENTRO de la pagina, asi que hay que estar en el panel
+    # de drivers; desde la de facturacion el navegador lo bloquearia.
+    if "provider-management" not in (driver.current_url or ""):
+        driver.get(extraer_api.URL)
+        time.sleep(3)
+
+    registros = extraer_api.extraer_todo(driver)
+    padron = {}
+    for r in registros:
+        if r.get("id"):
+            padron[r["id"]] = {
+                "nombre": r.get("nombre", ""),
+                "curp": r.get("curp", ""),
+                "estatus": r.get("estatus", ""),
+                "telefono": r.get("telefono", ""),
+                "email": r.get("email", ""),
+            }
+    return padron
+
+
 def cargar_padron():
-    """Lee el drivers_meli_*.txt mas reciente: id -> datos del driver."""
+    """Lee el drivers_meli_*.txt mas reciente: id -> datos del driver.
+
+    Sirve de respaldo si no se pudo bajar el padron en vivo.
+    """
     archivos = sorted(glob.glob(os.path.join(BASE_DIR, "drivers_meli_*.txt")))
     if not archivos:
         return {}, None

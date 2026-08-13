@@ -554,8 +554,19 @@ sesión, escribe el número de prefactura y presiona **2 · Extraer TODO**.
 El período se deduce solo: `202607Q1` → del 1 al 15 de julio, así que pide el
 reporte de operación del rango correcto sin que tú elijas fechas.
 
-**Requiere** un `drivers_meli_*.txt` en la carpeta para poder añadir la CURP —
-genéralo antes con `DriversMeli.exe`.
+**No hace falta preparar nada antes.** El padrón se baja de MELI en cada
+corrida (~15 s), así que un driver contratado ayer trae su CURP igual. Si esa
+bajada fallara, usa como respaldo el `drivers_meli_*.txt` más reciente que
+encuentre en la carpeta.
+
+Los cuatro pasos que hace por dentro:
+
+```
+Paso 1 de 4: bajando el padron de drivers...
+Paso 2 de 4: detalle de la prefactura...
+Paso 3 de 4: reporte de operacion del periodo...
+Paso 4 de 4: cruzando por ID de ruta...
+```
 
 ### Columnas
 

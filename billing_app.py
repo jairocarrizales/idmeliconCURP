@@ -130,14 +130,28 @@ class Trabajador(QObject):
                 self.driver.get(url)
                 time.sleep(4)
 
-            padron, ruta_padron = nucleo.cargar_padron()
-            if padron:
-                self.log(f"Padron: {len(padron)} drivers "
-                         f"({os.path.basename(ruta_padron)})")
-            else:
-                self.log("AVISO: sin drivers_meli_*.txt, no habra CURP.")
+            # 1) Padron fresco: asi los drivers nuevos tambien traen CURP
+            self.log("Paso 1 de 4: bajando el padron de drivers...")
+            padron = {}
+            try:
+                padron = nucleo.bajar_padron(self.driver)
+                self.log(f"  {len(padron)} drivers con sus datos")
+            except Exception as e:
+                self.log(f"  No se pudo bajar el padron: {str(e)[:110]}")
+                padron, ruta_padron = nucleo.cargar_padron()
+                if padron:
+                    self.log(f"  Usando el archivo previo: "
+                             f"{os.path.basename(ruta_padron)} ({len(padron)})")
+                else:
+                    self.log("  AVISO: sin padron, las filas no tendran CURP.")
 
-            # 1) Detalle
+            # Volver a la prefactura: el padron nos movio de pagina
+            if id_pref not in (self.driver.current_url or ""):
+                self.driver.get(url)
+                time.sleep(3)
+
+            # 2) Detalle de la prefactura
+            self.log("Paso 2 de 4: detalle de la prefactura...")
             filas, periodo, _ = nucleo.bajar_detalle(self.driver, id_pref)
             if not filas:
                 self.puente.fallo.emit(
@@ -156,6 +170,7 @@ class Trabajador(QObject):
                 )
                 return
 
+            self.log("Paso 3 de 4: reporte de operacion del periodo...")
             mapa = {}
             try:
                 mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
@@ -164,7 +179,7 @@ class Trabajador(QObject):
                 self.log("Se continua sin ID de usuario.")
 
             # 3) Cruce por numero de ruta
-            self.log("Cruzando por ID de ruta...")
+            self.log("Paso 4 de 4: cruzando por ID de ruta...")
             con_id = sin_ruta = sin_mapa = 0
             for f in filas:
                 ruta = f.get("ruta", "")
