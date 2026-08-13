@@ -104,7 +104,11 @@ def campos_interesantes(obj, prefijo=""):
     if isinstance(obj, dict):
         for k, v in obj.items():
             ruta = f"{prefijo}.{k}" if prefijo else k
-            if any(b in k.lower() for b in BUSCADOS) and not isinstance(v, (dict, list)):
+            if (
+                any(b in k.lower() for b in BUSCADOS)
+                and not isinstance(v, (dict, list))
+                and v not in (None, "")      # un campo nulo no es un hallazgo
+            ):
                 hallados[ruta] = v
             elif isinstance(v, (dict, list)):
                 hallados.update(campos_interesantes(v, ruta))
@@ -242,12 +246,30 @@ def main():
             input(">>> ENTER para cerrar... ")
             return
 
-        ejemplo = resultados[0]
-        id_prueba = ejemplo.get("id")
+        # Buscar un registro utilizable: las invitaciones pendientes traen
+        # id 0, que no sirve para consultar una ficha.
+        ejemplo, id_prueba = None, None
+        for candidato in resultados:
+            valor = candidato.get("id")
+            if valor:                      # descarta None, 0 y ""
+                ejemplo, id_prueba = candidato, valor
+                break
+
         if not id_prueba:
-            log(f"El primer registro no trae 'id'. Claves: {list(ejemplo.keys())}")
+            log("Ningun registro del lote trae un id utilizable.")
+            log(f"Claves del primero: {list(resultados[0].keys())}")
             input(">>> ENTER para cerrar... ")
             return
+
+        # De paso: ver que campos de contacto trae YA el listado
+        contacto_listado = campos_interesantes(ejemplo)
+        if contacto_listado:
+            log("El LISTADO ya trae campos de contacto:")
+            for k, v in contacto_listado.items():
+                texto = str(v)
+                log(f"    {k} = {texto[:3]}{'*' * max(0, len(texto) - 3)}")
+        else:
+            log("El listado no trae contacto en este registro.")
 
         nombre = f"{ejemplo.get('firstName','')} {ejemplo.get('lastName','')}".strip()
         log(f"Driver de prueba: {nombre} (id {id_prueba})")

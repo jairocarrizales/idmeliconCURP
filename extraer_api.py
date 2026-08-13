@@ -374,6 +374,11 @@ def main():
         print(f"    Con telefono             {n_tel}/{len(registros)}")
         print(f"    Con e-mail               {n_mail}/{len(registros)}")
         print()
+        if not n_tel:
+            print("    Nota: la API del listado no devuelve telefono ni e-mail")
+            print("    de los drivers activos; solo estan en la ficha individual.")
+            print("    Usa ProbarPerfilAPI.exe para buscar la API de la ficha.")
+            print()
         print(f"  TXT (tabs, para Excel): {txt}")
         print(f"  CSV (punto y coma)    : {csv_path}")
         print("=" * 70)

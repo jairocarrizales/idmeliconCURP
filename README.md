@@ -124,10 +124,14 @@ En la interfaz, estos campos viven en la ficha individual del driver
 **Versión API** — el `id` **viene incluido** en cada registro del JSON, así que se
 obtiene sin abrir nada: 100% de cobertura.
 
-**El teléfono NO viene en el listado.** Confirmado en una corrida de 2,025
-registros: 0 con teléfono. La API `drivers-and-invites` devuelve identidad y
-estado, pero no datos de contacto. Lo mismo pasa con `blockingReason`, que llega
-vacío incluso en los 543 bloqueados — el motivo solo aparece en la ficha.
+**El teléfono y el e-mail NO vienen en el listado.** Confirmado en una corrida de
+2,025 registros: 0 con teléfono, 1 con e-mail. El JSON *sí incluye* una clave
+`email` en su esquema, pero llega en `null` para los drivers reales; el único que
+la trae es una invitación pendiente, y **enmascarada por el propio MELI**
+(`ant****@gmail***`). No hay un campo `phone` en la respuesta.
+
+Lo mismo pasa con `blockingReason`: llega vacío incluso en los 543 bloqueados —
+el motivo solo aparece en la ficha individual.
 
 Para conseguirlos habría que consultar la API del perfil driver por driver.
 `ProbarPerfilAPI.exe` averigua si esa API existe: prueba varias rutas candidatas
