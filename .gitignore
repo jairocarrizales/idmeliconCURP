@@ -34,3 +34,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Control y rutas: traen nombres y datos de operacion
+rutas/
+rutas_*.txt
+rutas_*.csv
+ruta_completa_*.txt

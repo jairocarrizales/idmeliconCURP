@@ -1,0 +1,472 @@
+# -*- coding: utf-8 -*-
+"""
+Extractor de rutas diarias para el control.
+
+Genera UNA tabla con las 20 columnas que se pueden llenar automaticamente,
+para un rango de fechas. Sin columnas vacias: lo que no viene de MELI no se
+incluye.
+
+Fuentes:
+  1. GET /api/carriers/reports?mile=LM&init_date=..&end_date=..&report_type=carrier
+     -> XLSX con fecha, ruta, id y nombre del transportista, placa, KM,
+        despachados, entregados, no visitado, SPORH
+
+  2. API del monitoreo por estacion  (pendiente: la encuentra SondearRutas)
+     -> CEDIS_MELI, Vehiculo, Tipo_de_servicio, Tipo_de_ruta, ZONA_DE_RUTA,
+        CODIGO_POSTAL, RUTA
+
+El Tipo_de_servicio distingue las dos familias del control:
+    "Service Partner"  -> SP
+    "RD" / "SDD"       -> RD
+"""
+
+import io
+import os
+import re
+import csv
+import sys
+import json
+import time
+import base64
+import zipfile
+from datetime import datetime, timedelta
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+PANEL = "https://envios.adminml.com/logistics/monitoring-distribution"
+API_REPORTE = "https://envios.adminml.com/api/carriers/reports"
+
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
+
+# Las columnas del control que se pueden llenar con datos reales.
+# Se dejaron fuera CODIGO_POSTAL, TIPO_DE_VEHICULO, Tipo_de_ruta y RUTA:
+# no existen en ninguna de las dos APIs, y una columna vacia estorba al
+# cargar el archivo a un sistema.
+COLUMNAS = [
+    "FECHA", "CEDIS_MELI", "ID_USUARIO", "DRIVER", "Vehiculo", "Placas",
+    "Tipo_de_servicio", "ZONA_DE_RUTA", "ID_Ruta", "SPR", "ENTREGADOS",
+    "FALLIDOS", "KM", "NO_VISITADOS", "PROD_HORA", "PERFORMANCE",
+]
+
+
+def log(msg):
+    print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
+
+
+def limpiar(v):
+    if v is None:
+        return ""
+    t = str(v).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return " ".join(t.split()).strip()
+
+
+def numero(v):
+    """Devuelve el valor como numero, o None si no lo es."""
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+# ------------------------------------------------------------------ Chrome
+def cerrar_chrome_huerfano():
+    if os.name != "nt":
+        return
+    marca = os.path.basename(PROFILE_DIR)
+    proyecto = os.path.basename(os.path.dirname(PROFILE_DIR))
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like '*{proyecto}*' -and "
+        f"$_.CommandLine -like '*{marca}*' }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+        "-ErrorAction SilentlyContinue }"
+    )
+    try:
+        import subprocess
+
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, timeout=25,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+
+def crear_driver():
+    if os.path.isdir(PROFILE_DIR):
+        cerrar_chrome_huerfano()
+        for n in ("lockfile", "LOCK", "SingletonLock", "SingletonCookie",
+                  "SingletonSocket", "DevToolsActivePort"):
+            for c in (PROFILE_DIR, os.path.join(PROFILE_DIR, "Default")):
+                try:
+                    p = os.path.join(c, n)
+                    if os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+
+    opts = Options()
+    opts.add_argument(f"--user-data-dir={PROFILE_DIR}")
+    opts.add_argument("--profile-directory=Default")
+    opts.add_argument("--start-maximized")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--lang=es-MX")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    try:
+        return webdriver.Chrome(options=opts)
+    except Exception as e:
+        if "user data directory is already in use" in str(e).lower():
+            log("ERROR: el perfil de Chrome esta en uso por otra ventana.")
+            log(f"Cierra esas ventanas o borra: {PROFILE_DIR}")
+        raise
+
+
+def llamar(driver, url, binario=False):
+    """Llama la API desde la pagina, reusando su sesion."""
+    if binario:
+        script = """
+        const url = arguments[0];
+        const done = arguments[arguments.length - 1];
+        fetch(url, {credentials: 'include'}).then(r => r.blob().then(b => {
+          const lector = new FileReader();
+          lector.onloadend = () => done({status: r.status,
+                                         b64: lector.result.split(',')[1] || ''});
+          lector.onerror = () => done({status: r.status, b64: ''});
+          lector.readAsDataURL(b);
+        })).catch(e => done({status: 0, b64: '', error: String(e)}));
+        """
+    else:
+        script = """
+        const url = arguments[0];
+        const done = arguments[arguments.length - 1];
+        fetch(url, {credentials: 'include',
+                    headers: {'Accept': 'application/json, text/plain, */*'}})
+          .then(r => r.text().then(t => done({status: r.status, body: t})))
+          .catch(e => done({status: 0, body: String(e)}));
+        """
+    driver.set_script_timeout(180)
+    return driver.execute_async_script(script, url)
+
+
+# ------------------------------------------------------- lectura del XLSX
+def leer_xlsx(datos):
+    """Lee un XLSX sin openpyxl: es un ZIP con XML adentro."""
+    with zipfile.ZipFile(io.BytesIO(datos)) as z:
+        compartidas = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            xml = z.read("xl/sharedStrings.xml").decode("utf-8", "replace")
+            for si in re.findall(r"<si>(.*?)</si>", xml, re.S):
+                texto = "".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S))
+                compartidas.append(
+                    texto.replace("&amp;", "&").replace("&lt;", "<")
+                    .replace("&gt;", ">").replace("&quot;", '"')
+                    .replace("&#39;", "'")
+                )
+
+        hojas = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]
+        if not hojas:
+            return [], []
+        xml = z.read(sorted(hojas)[0]).decode("utf-8", "replace")
+
+    filas = []
+    for fila_xml in re.findall(r"<row[^>]*>(.*?)</row>", xml, re.S):
+        celdas = {}
+        for celda in re.findall(r"<c\s+([^>]*)>(.*?)</c>|<c\s+([^>]*)/>",
+                                fila_xml, re.S):
+            attrs = celda[0] or celda[2] or ""
+            contenido = celda[1] or ""
+            ref = re.search(r'r="([A-Z]+)\d+"', attrs)
+            if not ref:
+                continue
+            col = 0
+            for ch in ref.group(1):
+                col = col * 26 + (ord(ch) - 64)
+            col -= 1
+
+            valor = ""
+            v = re.search(r"<v>(.*?)</v>", contenido, re.S)
+            if v:
+                valor = v.group(1)
+                if 't="s"' in attrs:
+                    try:
+                        valor = compartidas[int(valor)]
+                    except (ValueError, IndexError):
+                        pass
+            else:
+                t = re.search(r"<t[^>]*>(.*?)</t>", contenido, re.S)
+                if t:
+                    valor = t.group(1)
+            celdas[col] = valor
+
+        if celdas:
+            filas.append([celdas.get(i, "") for i in range(max(celdas) + 1)])
+
+    if not filas:
+        return [], []
+    return filas[0], filas[1:]
+
+
+def sin_tildes(t):
+    """'Kilómetros' -> 'kilometros'. El reporte usa acentos y hay que
+    compararlos sin ellos para no depender de como los escriba MELI."""
+    t = limpiar(t).lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"),
+                 ("ñ", "n"), ("ü", "u")):
+        t = t.replace(a, b)
+    return t
+
+
+def indice_de(cab, *nombres):
+    """Busca una columna por nombre exacto o parcial, ignorando tildes."""
+    normal = {sin_tildes(c): i for i, c in enumerate(cab)}
+    for n in nombres:
+        clave = sin_tildes(n)
+        if clave in normal:
+            return normal[clave]
+    for clave, i in normal.items():
+        if any(sin_tildes(n) in clave for n in nombres):
+            return i
+    return None
+
+
+# --------------------------------------------------------------- extraer
+def bajar_reporte(driver, desde, hasta):
+    """Reporte de operacion: una fila por ruta, con id del transportista."""
+    url = (f"{API_REPORTE}?mile=LM&init_date={desde}"
+           f"&end_date={hasta}&report_type=carrier")
+    log(f"Pidiendo el reporte del {desde} al {hasta}...")
+
+    r = llamar(driver, url, binario=True)
+    if r.get("status") != 200 or not r.get("b64"):
+        raise RuntimeError(
+            f"El reporte respondio {r.get('status')}. "
+            "Revisa que la sesion siga activa."
+        )
+
+    datos = base64.b64decode(r["b64"])
+    log(f"  Recibidos {len(datos)} bytes")
+
+    cab, filas = leer_xlsx(datos)
+    if not cab:
+        raise RuntimeError("El XLSX llego vacio.")
+
+    # Localizar las columnas por nombre: el orden podria cambiar
+    idx = {
+        "fecha": indice_de(cab, "fecha", "date"),
+        "ruta": indice_de(cab, "id de la ruta", "route id"),
+        "id_usuario": indice_de(cab, "id del transportista", "driver id"),
+        "driver": indice_de(cab, "nombre del transportista", "driver name"),
+        "vehiculo": indice_de(cab, "vehiculo", "vehicle"),
+        "placa": indice_de(cab, "placa", "plate"),
+        "municipio": indice_de(cab, "municipio visitado", "city"),
+        "servicio": indice_de(cab, "service type", "tipo de servicio"),
+        "km": indice_de(cab, "kilometros recorridos", "km"),
+        "centro": indice_de(cab, "service center", "cedis"),
+        "spr": indice_de(cab, "envios despachados", "dispatched"),
+        "entregados": indice_de(cab, "envios entregados", "delivered"),
+        "exitosa": indice_de(cab, "entrega exitosa", "success"),
+        "no_visitado": indice_de(cab, "no visitado", "not visited"),
+        "sporh": indice_de(cab, "sporh"),
+    }
+
+    faltan = [k for k, v in idx.items() if v is None]
+    if idx["ruta"] is None or idx["id_usuario"] is None:
+        raise RuntimeError(
+            f"El reporte no trae las columnas clave. Tiene: {', '.join(cab[:12])}"
+        )
+    if faltan:
+        log(f"  Columnas no halladas (quedaran vacias): {', '.join(faltan)}")
+
+    def celda(f, clave):
+        i = idx.get(clave)
+        return limpiar(f[i]) if i is not None and i < len(f) else ""
+
+    registros = []
+    for f in filas:
+        ruta = celda(f, "ruta")
+        if not ruta:
+            continue
+
+        spr = numero(celda(f, "spr"))
+        entregados = numero(celda(f, "entregados"))
+        # El reporte no trae fallidos: se deducen
+        fallidos = ""
+        if spr is not None and entregados is not None:
+            fallidos = int(spr - entregados)
+
+        # PERFORMANCE = entregados / despachados
+        performance = ""
+        if spr and entregados is not None:
+            performance = round(entregados / spr, 10)
+
+        registros.append({
+            "FECHA": celda(f, "fecha"),
+            "CEDIS_MELI": celda(f, "centro"),
+            "ID_USUARIO": celda(f, "id_usuario"),
+            "DRIVER": celda(f, "driver"),
+            "Vehiculo": celda(f, "vehiculo"),
+            "Placas": celda(f, "placa"),
+            "Tipo_de_servicio": celda(f, "servicio"),
+            # El municipio visitado es lo que el control llama zona de ruta
+            "ZONA_DE_RUTA": celda(f, "municipio"),
+            "ID_Ruta": ruta,
+            "SPR": celda(f, "spr"),
+            "ENTREGADOS": celda(f, "entregados"),
+            "FALLIDOS": str(fallidos) if fallidos != "" else "",
+            "KM": celda(f, "km"),
+            "NO_VISITADOS": celda(f, "no_visitado"),
+            "PROD_HORA": celda(f, "sporh"),
+            "PERFORMANCE": str(performance) if performance != "" else "",
+        })
+
+    log(f"  {len(registros)} rutas en el reporte")
+    return registros
+
+
+def servicio_desde_vehiculo(vehiculo):
+    """Deduce el Tipo_de_servicio a partir del vehiculo.
+
+    La columna 'Service type' del reporte llega vacia, pero el vehiculo la
+    determina. Comparando el control con el reporte:
+
+        MEDIA MILLA SP        -> Service Partner   (hoja SP)
+        SMALL/LARGE VAN MLP   -> RD                (hoja RD)
+        ...con sufijo SDD     -> SDD               (hoja RD)
+
+    En el control, 1444 de 1445 rutas SP usan Media Milla, y todas las de
+    Media Milla estan en SP.
+    """
+    v = (vehiculo or "").upper()
+    if not v:
+        return ""
+    if "MEDIA MILLA" in v or "MEDIA MILLLA" in v:   # el control tiene ambas
+        return "Service Partner"
+    if "SDD" in v:
+        return "SDD"
+    if "MLP" in v or "VAN" in v or "CAR" in v:
+        return "RD"
+    return ""
+
+
+def clasificar(registros):
+    """Marca cada ruta como SP o RD, y completa el Tipo_de_servicio.
+
+    En el control: "Service Partner" -> SP;  "RD" o "SDD" -> RD.
+    """
+    conteo = {"SP": 0, "RD": 0, "?": 0}
+    for r in registros:
+        # Si el reporte no trajo el servicio, deducirlo del vehiculo
+        if not (r.get("Tipo_de_servicio") or "").strip():
+            r["Tipo_de_servicio"] = servicio_desde_vehiculo(r.get("Vehiculo"))
+
+        servicio = (r.get("Tipo_de_servicio") or "").upper()
+        if "SERVICE PARTNER" in servicio or servicio == "SP":
+            r["_familia"] = "SP"
+        elif "SDD" in servicio or servicio == "RD":
+            r["_familia"] = "RD"
+        else:
+            r["_familia"] = ""
+        conteo[r["_familia"] or "?"] += 1
+    return conteo
+
+
+def guardar(registros, desde, hasta):
+    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"rutas_{desde}_a_{hasta}_{sello}".replace("-", "")
+    ruta_txt = os.path.join(BASE_DIR, base + ".txt")
+    ruta_csv = os.path.join(BASE_DIR, base + ".csv")
+
+    def campos(r):
+        return [limpiar(r.get(c, "")) for c in COLUMNAS]
+
+    with io.open(ruta_txt, "w", encoding="utf-8-sig", newline="") as f:
+        f.write("\t".join(COLUMNAS) + "\n")
+        for r in registros:
+            f.write("\t".join(campos(r)) + "\n")
+
+    with io.open(ruta_csv, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        w.writerow(COLUMNAS)
+        for r in registros:
+            w.writerow(campos(r))
+
+    return ruta_txt, ruta_csv
+
+
+def rango_por_defecto():
+    """Ayer, que es el caso mas comun."""
+    ayer = datetime.now() - timedelta(days=1)
+    return ayer.strftime("%Y-%m-%d"), ayer.strftime("%Y-%m-%d")
+
+
+def main():
+    print("=" * 70)
+    print("  EXTRACTOR DE RUTAS DIARIAS")
+    print("=" * 70)
+    print()
+
+    d_def, h_def = rango_por_defecto()
+    desde = input(f">>> Fecha inicial (ENTER para {d_def}): ").strip() or d_def
+    hasta = input(f">>> Fecha final   (ENTER para {h_def}): ").strip() or h_def
+
+    log("Abriendo Chrome...")
+    driver = crear_driver()
+
+    try:
+        driver.get(PANEL)
+        print("-" * 70)
+        print("  Inicia sesion si hace falta y espera a ver el panel.")
+        print("-" * 70)
+        input("\n>>> ENTER cuando lo veas... ")
+
+        if "adminml.com" not in (driver.current_url or ""):
+            driver.get(PANEL)
+            time.sleep(4)
+
+        registros = bajar_reporte(driver, desde, hasta)
+        if not registros:
+            log("El reporte no trajo rutas para ese rango.")
+            input(">>> ENTER para cerrar... ")
+            return
+
+        conteo = clasificar(registros)
+        txt, csvf = guardar(registros, desde, hasta)
+
+        con_id = sum(1 for r in registros if r.get("ID_USUARIO"))
+        print()
+        print("=" * 70)
+        print(f"  LISTO. {len(registros)} rutas del {desde} al {hasta}")
+        print()
+        print(f"    Con ID de usuario   {con_id}/{len(registros)}")
+        print(f"    Service Partner     {conteo['SP']}")
+        print(f"    RD / SDD            {conteo['RD']}")
+        if conteo["?"]:
+            print(f"    Sin clasificar      {conteo['?']}")
+        print()
+        print(f"  TXT: {txt}")
+        print(f"  CSV: {csvf}")
+        print("=" * 70)
+
+    except Exception as e:
+        log(f"ERROR: {e}")
+        import traceback
+
+        traceback.print_exc()
+    finally:
+        input("\n>>> ENTER para cerrar... ")
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()
