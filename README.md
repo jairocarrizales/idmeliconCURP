@@ -14,9 +14,28 @@ drivers **activos** como de los **bloqueados**. Opcionalmente también
 
 | Ejecutable | Qué hace | Tiempo |
 |---|---|---|
-| **`ExtraerDriversAPI.exe`** ⭐ | Consulta directo la API de la tabla. Trae ID, nombre, CURP, estatus y motivo de bloqueo. **Empieza por este.** | segundos |
+| **`ExtraerDriversAPI.exe`** ⭐ | Consulta directo la API de la tabla. Trae ID, nombre, CURP y estatus. **Empieza por este.** | segundos |
 | `ExtraerDriversMeli.exe` | Lee el HTML presionando "Mostrar más". Respaldo si la API cambia. | minutos |
 | `DescubrirAPI.exe` | Diagnóstico: encuentra el endpoint si MELI lo mueve. | ~1 min |
+| `ProbarPerfilAPI.exe` | Diagnóstico: busca una API de perfil que traiga teléfono/e-mail. | ~1 min |
+
+### Rendimiento medido
+
+Corrida real del 12/ago/2026:
+
+```
+2,025 drivers en 15 segundos
+  Activo              1425
+  Bloqueado            543
+  Inactivo              56
+  Registro pendiente     1
+
+  ID     2025/2025 (100%)      Teléfono   0/2025  (no viene en el listado)
+  CURP   2005/2025  (99%)      Fecha   2025/2025 (100%)
+```
+
+La versión HTML tardaba del orden de media hora para lo mismo — y de los 543
+bloqueados solo rescataba el estatus.
 
 ---
 
@@ -103,17 +122,20 @@ En la interfaz, estos campos viven en la ficha individual del driver
 (*3 puntos → Ver Perfil*), no en el listado. Cómo los obtiene cada versión:
 
 **Versión API** — el `id` **viene incluido** en cada registro del JSON, así que se
-obtiene sin abrir nada. Teléfono y e-mail dependen de si la API del listado los
-devuelve; el resumen final lo reporta:
+obtiene sin abrir nada: 100% de cobertura.
 
-```
-Con ID          500/500
-Con CURP        487/500
-Con telefono      0/500   ← si sale 0, no vienen en el listado
-```
+**El teléfono NO viene en el listado.** Confirmado en una corrida de 2,025
+registros: 0 con teléfono. La API `drivers-and-invites` devuelve identidad y
+estado, pero no datos de contacto. Lo mismo pasa con `blockingReason`, que llega
+vacío incluso en los 543 bloqueados — el motivo solo aparece en la ficha.
 
-Si salen en cero y los necesitas, habría que consultar la API del perfil por cada
-ID — más lento, pero aún mucho más rápido que Selenium.
+Para conseguirlos habría que consultar la API del perfil driver por driver.
+`ProbarPerfilAPI.exe` averigua si esa API existe: prueba varias rutas candidatas
+con **un solo** registro y reporta cuál responde y qué campos trae, antes de
+invertir tiempo en las 2,000 consultas.
+
+Si la encuentra, extraer los contactos tomaría unos minutos (una llamada HTTP por
+driver) en lugar de la media hora que costaría abrir cada perfil con Selenium.
 
 **Versión HTML** — intenta sacar el ID del enlace de cada fila; si el listado no
 los expone (que es el caso hoy), recurre al menú de 3 puntos, abriendo perfil por

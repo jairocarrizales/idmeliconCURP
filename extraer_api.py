@@ -50,9 +50,13 @@ ESTATUS = {
     "active": "Activo",
     "inactive": "Inactivo",
     "blocked": "Bloqueado",
-    "pending": "Pendiente",
+    "pending": "Registro pendiente",
     "paused": "Pausado",
     "deleted": "Eliminado",
+    # Las invitaciones enviadas pero no completadas llegan con estos estados
+    "sent": "Registro pendiente",
+    "invited": "Registro pendiente",
+    "expired": "Invitacion vencida",
 }
 
 
