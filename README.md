@@ -593,6 +593,27 @@ más arriba, apuntada a distintas pantallas.
 
 ---
 
+## La skill: el método reutilizable
+
+Todo lo aprendido aquí está destilado en una skill de Claude Code, en
+[`skills/api-en-vez-de-scraping/`](skills/api-en-vez-de-scraping/).
+
+Sirve para **cualquier panel web con login**, no solo el de Mercado Libre:
+cómo descubrir el endpoint espiando el tráfico, cómo autenticarse sin tocar
+cookies, paginación por cursor, descarga de binarios, cruce de fuentes por
+identificador, y un catálogo de los errores que costaron tiempo.
+
+Incluye cinco scripts reutilizables (descubridor genérico, cliente de API,
+manejo del perfil de Chrome, lector de XLSX y plantilla de GUI).
+
+Para instalarla:
+
+```powershell
+Copy-Item skills\api-en-vez-de-scraping "$env:USERPROFILE\.claude\skills\" -Recurse
+```
+
+---
+
 ## Aviso sobre datos personales
 
 Los archivos generados contienen **CURP, nombres completos y — si usas el paso de
