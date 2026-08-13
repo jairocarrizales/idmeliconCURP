@@ -199,6 +199,10 @@ def texto_de(fila, selector):
 RE_CURP = re.compile(r"^[A-ZÑ&]{4}\d{6}[HM][A-ZÑ]{5}[A-Z0-9]{2}$", re.IGNORECASE)
 
 
+# El ID vive en la URL del perfil: /drivers/edit/5196349
+RE_ID_URL = re.compile(r"/drivers/edit/(\d+)")
+
+
 def quitar_prefijo_fecha(texto):
     """'Creado el 30/jun/2026' -> '30/jun/2026'"""
     t = limpiar(texto)
@@ -207,6 +211,35 @@ def quitar_prefijo_fecha(texto):
         if bajo.startswith(prefijo):
             return t[len(prefijo):].strip()
     return t
+
+
+def id_desde_fila(fila):
+    """Intenta sacar el ID del driver sin abrir su perfil.
+
+    El ID aparece en la URL del perfil (/drivers/edit/5196349). Si la fila trae
+    un <a> a esa ruta, o algun atributo con el id, lo tomamos gratis.
+    Devuelve "" si no esta disponible en el listado.
+    """
+    # 1) Un enlace directo al perfil
+    try:
+        for a in fila.find_elements(By.CSS_SELECTOR, "a[href]"):
+            m = RE_ID_URL.search(a.get_attribute("href") or "")
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+
+    # 2) Algun atributo de datos en la fila o sus hijos
+    try:
+        for attr in ("data-id", "data-driver-id", "data-testid", "id"):
+            valor = fila.get_attribute(attr) or ""
+            m = re.search(r"(\d{4,})", valor)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+
+    return ""
 
 
 def extraer_datos(driver):
@@ -327,12 +360,15 @@ def extraer_datos(driver):
             registros.append(
                 {
                     "n": len(registros) + 1,
+                    "id": id_desde_fila(fila),
                     "nombre": nombre,
                     "curp": curp,
                     "tipo": tipo,
                     "fecha": fecha,
                     "estatus": estado,
                     "observacion": observacion,
+                    "telefono": "",
+                    "email": "",
                 }
             )
         except StaleElementReferenceException:
@@ -349,6 +385,192 @@ def extraer_datos(driver):
     return registros
 
 
+URL_PERFIL = "https://envios.adminml.com/logistics/provider-management/drivers/edit/"
+
+
+def valor_de_campo(driver, nombre_input):
+    """Lee el value de un <input name="..."> del formulario de perfil."""
+    for sel in (
+        f"input[name='{nombre_input}']",
+        f"input#{nombre_input}",
+        f"[data-testid='{nombre_input}'] input",
+    ):
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            v = limpiar(el.get_attribute("value") or el.text)
+            if v:
+                return v
+        except NoSuchElementException:
+            continue
+        except Exception:
+            continue
+    return ""
+
+
+def leer_perfil(driver):
+    """Estando ya en la pagina de perfil, lee ID, telefono y e-mail."""
+    datos = {"id": "", "telefono": "", "email": ""}
+
+    # El ID mas confiable es el de la propia URL
+    m = RE_ID_URL.search(driver.current_url or "")
+    if m:
+        datos["id"] = m.group(1)
+
+    if not datos["id"]:
+        datos["id"] = valor_de_campo(driver, "id")
+
+    datos["telefono"] = valor_de_campo(driver, "phone")
+    datos["email"] = valor_de_campo(driver, "email")
+
+    # Respaldo: barrer todos los inputs y clasificar por su etiqueta/atributo
+    if not (datos["telefono"] and datos["email"]):
+        try:
+            for inp in driver.find_elements(By.CSS_SELECTOR, "input"):
+                nombre_attr = (inp.get_attribute("name") or "").lower()
+                valor = limpiar(inp.get_attribute("value") or "")
+                if not valor:
+                    continue
+                if not datos["email"] and "@" in valor:
+                    datos["email"] = valor
+                elif not datos["telefono"] and "phone" in nombre_attr:
+                    datos["telefono"] = valor
+        except Exception:
+            pass
+
+    return datos
+
+
+def abrir_perfiles(driver, registros, solo_faltantes=True):
+    """Abre el perfil de cada driver para completar ID, telefono y e-mail.
+
+    Navega directo por URL (mas rapido y estable que usar el menu de 3 puntos).
+    Para los que no tenemos ID todavia, hay que pasar por el menu.
+    """
+    con_id = [r for r in registros if r["id"]]
+    sin_id = [r for r in registros if not r["id"]]
+
+    if sin_id and not con_id:
+        log(
+            "No se encontro ningun ID en el listado; hay que abrir los perfiles "
+            "desde el menu de 3 puntos."
+        )
+        return abrir_perfiles_por_menu(driver, registros)
+
+    if sin_id:
+        log(f"ADVERTENCIA: {len(sin_id)} registros sin ID en el listado.")
+
+    pendientes = con_id if not solo_faltantes else [
+        r for r in con_id if not (r["telefono"] and r["email"])
+    ]
+
+    total = len(pendientes)
+    log(f"Abriendo {total} perfiles para obtener telefono y e-mail...")
+
+    for i, r in enumerate(pendientes, start=1):
+        try:
+            driver.get(URL_PERFIL + r["id"])
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input"))
+            )
+            time.sleep(0.5)
+            datos = leer_perfil(driver)
+            r["telefono"] = datos["telefono"]
+            r["email"] = datos["email"]
+            if datos["id"]:
+                r["id"] = datos["id"]
+        except Exception as e:
+            log(f"  No se pudo leer el perfil {r['id']} ({r['nombre']}): {e}")
+
+        if i % 10 == 0 or i == total:
+            log(f"  Perfiles leidos: {i}/{total}")
+
+    return registros
+
+
+def abrir_perfiles_por_menu(driver, registros):
+    """Plan B: si el listado no expone el ID, entra por el menu de 3 puntos.
+
+    Por cada fila: clic en los 3 puntos -> "Ver Perfil" -> leer -> volver atras.
+    Es mas lento y fragil, pero funciona cuando no hay enlace en el listado.
+    """
+    log("Modo menu: se abrira el perfil fila por fila (mas lento).")
+
+    # OJO: al volver atras se pierde la paginacion y solo quedan las filas de
+    # la primera tanda. Por eso este modo solo cubre las que sigan visibles.
+    disponibles = len(driver.find_elements(By.CSS_SELECTOR, "li.list__row"))
+    if disponibles < len(registros):
+        log(
+            f"AVISO: tras volver a la lista solo hay {disponibles} filas visibles "
+            f"de {len(registros)}. Solo esas obtendran ID/telefono/e-mail."
+        )
+
+    total = min(disponibles, len(registros))
+
+    for i, r in enumerate(registros[:total], start=1):
+        try:
+            # Hay que reubicar la fila en cada vuelta, porque al navegar se
+            # pierden las referencias del DOM.
+            filas = driver.find_elements(By.CSS_SELECTOR, "li.list__row")
+            if i - 1 >= len(filas):
+                log(f"  Fila {i} ya no esta disponible; se omite.")
+                continue
+            fila = filas[i - 1]
+
+            boton = fila.find_element(By.CSS_SELECTOR, "button.menu__button")
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});", boton
+            )
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click();", boton)
+            time.sleep(0.6)
+
+            # "Ver Perfil" es la primera opcion del menu flotante
+            opcion = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        "//button[contains(@class,'andes-list__item-actionable')]"
+                        "[.//*[contains(text(),'Ver Perfil')] or contains(.,'Ver Perfil')]",
+                    )
+                )
+            )
+            driver.execute_script("arguments[0].click();", opcion)
+
+            WebDriverWait(driver, 20).until(
+                lambda d: "/drivers/edit/" in d.current_url
+            )
+            time.sleep(0.5)
+
+            datos = leer_perfil(driver)
+            r["id"] = datos["id"] or r["id"]
+            r["telefono"] = datos["telefono"]
+            r["email"] = datos["email"]
+
+            driver.back()
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "li.list__row"))
+            )
+            time.sleep(0.5)
+        except Exception as e:
+            log(f"  Fila {i} ({r['nombre']}): no se pudo abrir el perfil ({e})")
+            # Intentar volver a la lista si nos quedamos en el perfil
+            try:
+                if "/drivers/edit/" in driver.current_url:
+                    driver.get(URL)
+                    WebDriverWait(driver, 20).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "li.list__row")
+                        )
+                    )
+            except Exception:
+                pass
+
+        if i % 10 == 0 or i == total:
+            log(f"  Perfiles leidos: {i}/{total}")
+
+    return registros
+
+
 def guardar(registros):
     sello = datetime.now().strftime("%Y%m%d_%H%M%S")
     ruta_txt = os.path.join(BASE_DIR, f"drivers_meli_{sello}.txt")
@@ -356,23 +578,29 @@ def guardar(registros):
 
     encabezados = [
         "#",
+        "ID",
         "Nombre",
         "CURP",
-        "Tipo",
-        "Fecha creacion",
         "Estatus",
         "Observacion",
+        "Telefono",
+        "E-mail",
+        "Tipo",
+        "Fecha creacion",
     ]
 
     def campos(r):
         return [
             str(r["n"]),
+            r.get("id", ""),
             r["nombre"],
             r["curp"],
-            r["tipo"],
-            r["fecha"],
             r["estatus"],
             r.get("observacion", ""),
+            r.get("telefono", ""),
+            r.get("email", ""),
+            r["tipo"],
+            r["fecha"],
         ]
 
     # TXT separado por tabuladores -> se pega directo en Excel
@@ -437,7 +665,38 @@ def main():
             input(">>> ENTER para cerrar... ")
             return
 
+        con_id = sum(1 for r in registros if r["id"])
+        log(f"IDs obtenidos del listado: {con_id}/{len(registros)}")
+
+        # Guardamos ya mismo lo del listado: si el paso de perfiles falla o se
+        # interrumpe, no perdemos lo que ya costo trabajo cargar.
         txt, csv_path = guardar(registros)
+        log(f"Respaldo del listado guardado: {os.path.basename(txt)}")
+
+        # --- Paso opcional: abrir perfiles ---
+        print()
+        print("-" * 70)
+        if con_id == len(registros):
+            print("  Ya tenemos el ID de todos los drivers.")
+            print("  Abrir los perfiles solo agregaria TELEFONO y E-MAIL,")
+            print(f"  y tomaria unos {len(registros) * 3 // 60 + 1} minutos aprox.")
+        else:
+            print(f"  Faltan IDs de {len(registros) - con_id} drivers.")
+            print("  Para obtenerlos hay que abrir su perfil uno por uno,")
+            print(f"  lo que tomaria unos {len(registros) * 4 // 60 + 1} minutos aprox.")
+            print("  De paso se obtienen tambien telefono y e-mail.")
+        print("-" * 70)
+        resp = input("\n>>> Abrir los perfiles? (s/n): ").strip().lower()
+
+        if resp.startswith("s"):
+            try:
+                abrir_perfiles(driver, registros)
+            except KeyboardInterrupt:
+                log("Lectura de perfiles interrumpida; se guarda lo obtenido.")
+            except Exception as e:
+                log(f"Fallo la lectura de perfiles: {e}")
+                log("Se guarda de todos modos lo que se alcanzo a obtener.")
+            txt, csv_path = guardar(registros)
 
         # Resumen por estatus
         conteo = {}
@@ -445,12 +704,21 @@ def main():
             clave = r["estatus"] or "(sin estatus)"
             conteo[clave] = conteo.get(clave, 0) + 1
 
+        n_id = sum(1 for r in registros if r.get("id"))
+        n_tel = sum(1 for r in registros if r.get("telefono"))
+        n_mail = sum(1 for r in registros if r.get("email"))
+
         print()
         print("=" * 70)
         print(f"  LISTO. {len(registros)} drivers extraidos.")
         print()
         for clave in sorted(conteo, key=lambda k: -conteo[k]):
             print(f"    {clave:<20} {conteo[clave]}")
+        print()
+        print(f"    Con ID               {n_id}/{len(registros)}")
+        if n_tel or n_mail:
+            print(f"    Con telefono         {n_tel}/{len(registros)}")
+            print(f"    Con e-mail           {n_mail}/{len(registros)}")
         print()
         print(f"  TXT (tabs, para Excel): {txt}")
         print(f"  CSV (punto y coma)    : {csv_path}")
