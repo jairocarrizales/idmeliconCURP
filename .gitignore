@@ -40,3 +40,6 @@ rutas/
 rutas_*.txt
 rutas_*.csv
 ruta_completa_*.txt
+
+detalle_ruta_*.txt
+nombre_ruta_*.txt
