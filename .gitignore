@@ -43,3 +43,7 @@ ruta_completa_*.txt
 
 detalle_ruta_*.txt
 nombre_ruta_*.txt
+
+# Reportes de las sondas: pueden traer datos de conductores
+diagnosticos/
+resultados/

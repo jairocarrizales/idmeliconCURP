@@ -20,10 +20,11 @@ from PySide6.QtGui import QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QPlainTextEdit, QFrame, QMessageBox, QGridLayout,
-    QSizePolicy, QLineEdit,
+    QSizePolicy, QLineEdit, QComboBox,
 )
 
 import extraer_billing as nucleo
+import listar_prefacturas as lista
 
 # ---------------------------------------------------------------- colores
 FONDO = "#1e2128"
@@ -83,6 +84,7 @@ class Ordenes(QObject):
     """Señales para pedirle trabajo al hilo secundario."""
 
     abrir = Signal()
+    cargar_lista = Signal()
     extraer = Signal(str)
     cerrar = Signal()
 
@@ -113,6 +115,33 @@ class Trabajador(QObject):
             self.driver.get("https://envios.adminml.com/logistics/billing/invoices")
             self.log("Chrome abierto. Inicia sesion en esa ventana.")
             self.puente.terminado.emit("navegador", None)
+        except Exception as e:
+            self.puente.fallo.emit(self._explicar(e))
+
+    @Slot()
+    def cargar_lista(self):
+        """Trae las prefacturas para llenar los desplegables."""
+        try:
+            if not self.driver:
+                self.puente.fallo.emit("Primero hay que abrir Chrome.")
+                return
+
+            # El fetch corre dentro de la pagina: hay que estar en el panel
+            if "billing" not in (self.driver.current_url or ""):
+                self.driver.get(
+                    "https://envios.adminml.com/logistics/billing/invoices")
+                time.sleep(3)
+
+            self.log("Buscando las prefacturas disponibles...")
+            prefacturas = lista.bajar_lista(self.driver, log=self.log)
+            if not prefacturas:
+                self.puente.fallo.emit(
+                    "No se encontraron prefacturas.\n\n"
+                    "Revisa que hayas iniciado sesion y que se vea el "
+                    "listado en Chrome."
+                )
+                return
+            self.puente.terminado.emit("lista", prefacturas)
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
 
@@ -254,8 +283,8 @@ class Ventana(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Prefacturas con ID - Mercado Libre")
-        self.resize(600, 430)
-        self.setMinimumSize(500, 380)
+        self.resize(620, 470)
+        self.setMinimumSize(540, 420)
         self.rutas = None
         self._armar()
         self._hilo()
@@ -282,26 +311,54 @@ class Ventana(QMainWindow):
         )
         raiz.addWidget(self.paso)
 
-        # --- prefactura ---
-        fila_id = QHBoxLayout()
-        fila_id.setSpacing(7)
-        etiqueta = QLabel("Prefactura #")
-        etiqueta.setStyleSheet(
-            f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
-        )
-        self.campo = QLineEdit()
-        self.campo.setPlaceholderText("6442506")
-        self.campo.setFixedHeight(30)
-        self.campo.setStyleSheet(
-            f"QLineEdit {{ background: {PANEL}; color: {TEXTO};"
+        # --- elegir la prefactura por mes y Q ---
+        fila_sel = QHBoxLayout()
+        fila_sel.setSpacing(7)
+
+        est_etiqueta = (f"color: {SUAVE}; font-family: {FUENTE};"
+                        f" font-size: 11px;")
+        est_combo = (
+            f"QComboBox {{ background: {PANEL}; color: {TEXTO};"
             f" border: 1px solid {BORDE}; border-radius: 6px; padding: 0 8px;"
-            f" font-family: {FUENTE}; font-size: 12px; }}"
-            f"QLineEdit:focus {{ border: 1px solid {AZUL}; }}"
+            f" font-family: {FUENTE}; font-size: 11px; }}"
+            f"QComboBox:hover {{ border: 1px solid {AZUL}; }}"
+            f"QComboBox::drop-down {{ border: none; width: 18px; }}"
+            f"QComboBox QAbstractItemView {{ background: {PANEL};"
+            f" color: {TEXTO}; selection-background-color: {AZUL}; }}"
         )
-        self.campo.returnPressed.connect(self.al_extraer)
-        fila_id.addWidget(etiqueta)
-        fila_id.addWidget(self.campo, 1)
-        raiz.addLayout(fila_id)
+
+        eti_mes = QLabel("Mes")
+        eti_mes.setStyleSheet(est_etiqueta)
+        self.combo_mes = QComboBox()
+        self.combo_mes.setFixedHeight(28)
+        self.combo_mes.setStyleSheet(est_combo)
+        self.combo_mes.currentIndexChanged.connect(self.al_cambiar_mes)
+
+        eti_q = QLabel("Quincena")
+        eti_q.setStyleSheet(est_etiqueta)
+        self.combo_q = QComboBox()
+        self.combo_q.setFixedHeight(28)
+        self.combo_q.setStyleSheet(est_combo)
+        self.combo_q.currentIndexChanged.connect(self.al_cambiar_q)
+
+        fila_sel.addWidget(eti_mes)
+        fila_sel.addWidget(self.combo_mes, 3)
+        fila_sel.addWidget(eti_q)
+        fila_sel.addWidget(self.combo_q, 2)
+        raiz.addLayout(fila_sel)
+
+        # Que prefactura quedo elegida
+        self.elegida = QLabel("Abre Mercado Libre para ver las prefacturas")
+        self.elegida.setStyleSheet(
+            f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
+            f" padding: 2px 0;"
+        )
+        raiz.addWidget(self.elegida)
+
+        self.combo_mes.setEnabled(False)
+        self.combo_q.setEnabled(False)
+        self.prefacturas = []      # todas las del listado
+        self.actual = None         # la elegida ahora mismo
 
         # --- botones ---
         fila = QHBoxLayout()
@@ -371,6 +428,7 @@ class Ventana(QMainWindow):
         self.trabajador.moveToThread(self.hilo)
 
         self.ordenes.abrir.connect(self.trabajador.abrir_navegador)
+        self.ordenes.cargar_lista.connect(self.trabajador.cargar_lista)
         self.ordenes.extraer.connect(self.trabajador.extraer)
         self.ordenes.cerrar.connect(self.trabajador.cerrar)
 
@@ -393,21 +451,80 @@ class Ventana(QMainWindow):
         self.pie.setText("Abriendo Chrome, espera un momento...")
         self.ordenes.abrir.emit()
 
+    def llenar_meses(self, prefacturas):
+        """Llena el desplegable de meses y elige el mas reciente."""
+        self.prefacturas = prefacturas
+        meses = lista.meses_disponibles(prefacturas, "regular", "last_mile")
+
+        if not meses:
+            self.elegida.setText(
+                "No hay prefacturas Regular · Last Mile en el listado")
+            return
+
+        self.combo_mes.blockSignals(True)
+        self.combo_mes.clear()
+        for clave, etiqueta in meses:
+            self.combo_mes.addItem(etiqueta, clave)
+        self.combo_mes.setCurrentIndex(0)      # el mas reciente
+        self.combo_mes.blockSignals(False)
+        self.combo_mes.setEnabled(True)
+        self.combo_q.setEnabled(True)
+
+        self.escribir(f"{len(prefacturas)} prefacturas, "
+                      f"{len(meses)} meses con Regular · Last Mile")
+        self.al_cambiar_mes()
+
+    def al_cambiar_mes(self):
+        """Al elegir mes, recargar sus quincenas y quedarse en la ultima."""
+        mes = self.combo_mes.currentData()
+        if not mes:
+            return
+        quincenas = lista.quincenas_de_mes(
+            self.prefacturas, mes, "regular", "last_mile")
+
+        self.combo_q.blockSignals(True)
+        self.combo_q.clear()
+        for q, pres in quincenas:
+            self.combo_q.addItem(q, pres)
+        self.combo_q.setCurrentIndex(0)        # Q2 antes que Q1
+        self.combo_q.blockSignals(False)
+        self.al_cambiar_q()
+
+    def al_cambiar_q(self):
+        """Mostrar la prefactura que corresponde a mes + Q."""
+        pres = self.combo_q.currentData()
+        if not pres:
+            self.actual = None
+            self.elegida.setText("Sin prefactura para ese periodo")
+            return
+
+        # Si hay varias, la de id mas alto es la ultima emitida
+        self.actual = sorted(pres, key=lambda p: int(p["id"] or 0),
+                             reverse=True)[0]
+        texto = lista.describir(self.actual)
+        if len(pres) > 1:
+            texto += f"   (+{len(pres) - 1} mas en el periodo)"
+        self.elegida.setText(texto)
+        self.elegida.setStyleSheet(
+            f"color: {TEXTO}; font-family: {FUENTE}; font-size: 11px;"
+            f" padding: 2px 0;"
+        )
+
     def al_extraer(self):
         if not self.b_extraer.isEnabled():
             return
-        id_pref = self.campo.text().strip() or self.campo.placeholderText()
-        if not id_pref.isdigit():
+        if not self.actual:
             QMessageBox.warning(
-                self, "Numero invalido",
-                "Escribe el numero de la prefactura, solo digitos.\n"
-                "Por ejemplo: 6442506"
+                self, "Sin prefactura",
+                "Elige un mes y una quincena con prefactura disponible."
             )
             return
+        id_pref = self.actual["id"]
         self.b_extraer.setEnabled(False)
         self.b_extraer.setText("Extrayendo...")
         self.pie.setText("Extrayendo. Puedes seguir usando la PC.")
-        self.escribir(f"Extrayendo la prefactura {id_pref}...")
+        self.escribir(f"Extrayendo la prefactura {id_pref} "
+                      f"({lista.periodo_legible(self.actual['periodo'])})...")
         self.ordenes.extraer.emit(id_pref)
 
     def al_carpeta(self):
@@ -417,14 +534,19 @@ class Ventana(QMainWindow):
     def al_terminar(self, etapa, datos):
         if etapa == "navegador":
             self.paso.setText(
-                "Paso 2 de 2  ·  Escribe la prefactura y presiona 'Extraer TODO'"
+                "Paso 2 de 2  ·  Elige el periodo y presiona 'Extraer TODO'"
             )
             self.b_extraer.setEnabled(True)
             self.b_extraer.setProperty("listo", True)
             self.b_abrir.setText("Reabrir Chrome")
             self.b_abrir.setEnabled(True)
-            self.pie.setText("Esperando a que inicies sesion")
-            self.campo.setFocus()
+            self.pie.setText("Buscando las prefacturas disponibles...")
+            # Llenar los desplegables solos, sin que el usuario haga nada
+            self.ordenes.cargar_lista.emit()
+
+        elif etapa == "lista":
+            self.llenar_meses(datos)
+            self.pie.setText("Listo para extraer")
 
         elif etapa == "listado" or etapa == "listo":
             resumen, rutas = datos

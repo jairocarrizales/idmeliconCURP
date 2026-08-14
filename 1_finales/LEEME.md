@@ -26,10 +26,22 @@ lo ya bajado.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 
-Escribes el número de prefactura y lo hace todo. El CSV que descarga el
-panel trae el **nombre** del conductor pero no su ID, y hay 25 nombres
-repetidos en el padrón — dos personas distintas llamadas igual. Este
-programa cruza por **número de ruta**, no por texto:
+**No hay que saberse el número.** Al abrir Chrome, el programa consulta el
+listado y llena dos desplegables:
+
+```
+Mes  [ Julio 2026  ▼]    Quincena  [ Q2 ▼]
+
+#6595499  ·  Regular  ·  Last Mile  ·  7,151,826.56 MXN  ·  Por pagar
+```
+
+Arranca en el **período más reciente**, así que normalmente solo hay que
+presionar *Extraer TODO*. Solo lista las **Regular · Last Mile** — las
+Complementarias y las de Line Haul quedan fuera.
+
+El CSV que descarga el panel trae el **nombre** del conductor pero no su
+ID, y hay 25 nombres repetidos en el padrón — dos personas distintas
+llamadas igual. Este programa cruza por **número de ruta**, no por texto:
 
 ```
 prefactura (ruta 147326006)
