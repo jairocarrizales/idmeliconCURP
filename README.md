@@ -1,25 +1,34 @@
-# Extractor de Drivers — Mercado Libre Envíos
+# Extractores de Mercado Libre Envíos
 
-Extrae la lista completa de transportistas de
-`envios.adminml.com/logistics/provider-management/drivers`
-y la guarda en un archivo listo para Excel.
-
-Captura **ID, nombre, CURP, estatus, tipo y fecha de creación** — tanto de los
-drivers **activos** como de los **bloqueados**. Opcionalmente también
-**teléfono y e-mail**.
+Tres herramientas que sacan datos del panel `envios.adminml.com` llamando a
+sus APIs, en vez de raspar el HTML. La diferencia medida: **de 30 minutos a
+15 segundos**, y trayendo campos que la pantalla no muestra.
 
 ---
 
-## Cuál usar
+## Los que se usan → [`1_finales/`](1_finales/)
 
-| Ejecutable | Qué hace | Tiempo |
+| Programa | Qué hace | Tiempo |
 |---|---|---|
-| **`DriversMeli.exe`** ⭐ | **Interfaz gráfica.** Todo con botones, sin terminal. **Empieza por este.** | segundos |
-| `ExtraerDriversAPI.exe` | La misma extracción, en consola. | segundos |
-| `ExtraerDriversMeli.exe` | Lee el HTML presionando "Mostrar más". Respaldo si la API cambia. | minutos |
-| **`PrefacturasMeli.exe`** ⭐ | **Prefacturas con el ID del conductor.** Cruza por número de ruta, no por nombre. | ~1 min |
-| `DescubrirAPI.exe` | Diagnóstico: encuentra el endpoint si MELI lo mueve. | ~1 min |
-| `ProbarPerfilAPI.exe` | Diagnóstico: busca una API de perfil que traiga teléfono/e-mail. | ~1 min |
+| **`DriversMeli.exe`** | Padrón: ID, nombre, CURP, estatus, teléfono | ~15 s |
+| **`PrefacturasMeli.exe`** | Prefactura con el ID del conductor en cada línea | ~1 min |
+| **`ExtraerRutas.exe`** | Rutas diarias para el control, con rango de fechas | ~30 s |
+
+Detalles de uso y columnas en [`1_finales/LEEME.md`](1_finales/LEEME.md).
+
+## Cómo está organizado el repo
+
+```
+1_finales/        los tres programas y su código
+2_preliminares/   las sondas que encontraron las APIs
+3_anteriores/     la primera versión, por scraping — se conserva de respaldo
+skills/           el método, para reutilizarlo en otros paneles
+resultados/       lo que generan los programas   (fuera del repo)
+diagnosticos/     los reportes de las sondas     (fuera del repo)
+```
+
+Las dos últimas quedan fuera del repositorio por `.gitignore`: contienen
+CURP, nombres y teléfonos.
 
 ### Rendimiento medido
 
@@ -32,12 +41,11 @@ Corrida real del 12/ago/2026:
   Inactivo              56
   Registro pendiente     1
 
-  ID     2025/2025 (100%)      Teléfono   0/2025  (no viene en el listado)
-  CURP   2005/2025  (99%)      Fecha   2025/2025 (100%)
+  ID     2025/2025 (100%)      CURP   2005/2025 (99%)
 ```
 
-La versión HTML tardaba del orden de media hora para lo mismo — y de los 543
-bloqueados solo rescataba el estatus.
+La versión por scraping tardaba del orden de media hora para lo mismo — y de
+los 543 bloqueados solo rescataba el estatus, porque usaban otras clases CSS.
 
 ---
 
