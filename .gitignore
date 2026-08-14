@@ -47,3 +47,7 @@ nombre_ruta_*.txt
 # Reportes de las sondas: pueden traer datos de conductores
 diagnosticos/
 resultados/
+
+# Prefacturas generadas en la carpeta de los programas
+1_finales/*.csv
+1_finales/descargas/

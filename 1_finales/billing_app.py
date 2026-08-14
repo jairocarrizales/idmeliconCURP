@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 import extraer_billing as nucleo
 import listar_prefacturas as lista
+import inyectar_id as inyectar
 
 # ---------------------------------------------------------------- colores
 FONDO = "#1e2128"
@@ -159,28 +160,31 @@ class Trabajador(QObject):
                 self.driver.get(url)
                 time.sleep(4)
 
-            # 1) Detalle de la prefactura
-            self.log("Paso 1 de 3: detalle de la prefactura...")
-            filas, periodo, crudo = nucleo.bajar_detalle(self.driver, id_pref)
-            cabecera = nucleo.cabecera_prefactura(crudo)
-            if not filas:
-                self.puente.fallo.emit(
-                    "La prefactura no trajo lineas de detalle.\n\n"
-                    "Revisa que el numero sea correcto y que la sesion "
-                    "siga activa."
-                )
-                return
+            # 1) El CSV tal como lo genera MELI, presionando su boton
+            self.log("Paso 1 de 3: descargando la prefactura...")
+            descargado = inyectar.bajar_csv(
+                self.driver, id_pref, nucleo.DESCARGAS, log=self.log)
 
-            # 2) Reporte del periodo
-            desde, hasta = nucleo.periodo_a_fechas(periodo)
+            texto = inyectar.leer_archivo(descargado)
+            filas_csv = inyectar.leer_csv(texto)
+            periodo = inyectar.periodo_del_csv(filas_csv) or ""
+            self.log(f"  {len(filas_csv)} filas, periodo {periodo or '?'}")
+
+            # 2) Reporte de operacion: dice que conductor hizo cada ruta.
+            #    Se pide el rango REAL del archivo, no el del periodo: una
+            #    prefactura de la 2a quincena trae rutas rezagadas de junio,
+            #    y pedir solo su periodo dejaba 144 filas sin id.
+            desde, hasta = inyectar.rango_de_fechas(filas_csv)
+            if not desde:
+                desde, hasta = nucleo.periodo_a_fechas(periodo)
             if not desde:
                 self.puente.fallo.emit(
-                    f"No se entendio el periodo '{periodo}'.\n\n"
-                    "Se esperaba algo como 202607Q1."
+                    f"No se pudo determinar el rango de fechas.\n\n"
+                    f"Periodo leido: '{periodo}'"
                 )
                 return
 
-            self.log("Paso 2 de 3: reporte de operacion del periodo...")
+            self.log(f"Paso 2 de 3: reporte de operacion, {desde} a {hasta}...")
             mapa = {}
             try:
                 mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
@@ -188,52 +192,35 @@ class Trabajador(QObject):
                 self.log(f"No se pudo traer el reporte: {str(e)[:120]}")
                 self.log("Se continua sin ID de usuario.")
 
-            # 3) Cruce por numero de ruta
-            self.log("Paso 3 de 3: cruzando por ID de ruta...")
-            con_id = sin_ruta = sin_mapa = 0
-            for f in filas:
-                ruta = f.get("ruta", "")
-                if not ruta:
-                    sin_ruta += 1
-                    continue
-                info = mapa.get(ruta)
-                if not info:
-                    sin_mapa += 1
-                    continue
-                f["id_usuario"] = info["id"]
-                f["nombre"] = info["nombre"]
-                con_id += 1
+            # 3) Insertar la columna, sin tocar nada mas
+            self.log("Paso 3 de 3: insertando el ID junto al conductor...")
+            nuevas, con_id, sin_id = inyectar.insertar_id(
+                filas_csv, mapa, log=self.log)
 
-            ruta_csv = nucleo.guardar(filas, id_pref, periodo, cabecera)
+            base = nucleo.nombre_archivo(periodo, id_pref)
+            ruta_csv = os.path.join(nucleo.BASE_DIR, base + ".csv")
+            if os.path.exists(ruta_csv):
+                n = 2
+                while os.path.exists(
+                        os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")):
+                    n += 1
+                ruta_csv = os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")
+
+            inyectar.escribir_csv(nuevas, ruta_csv)
             self.log(f"Guardado: {os.path.basename(ruta_csv)}")
 
-            # Comprobar contra lo que declara Meli
-            suma = 0.0
-            for f in filas:
-                try:
-                    suma += float((f.get("total") or "0").replace(",", ""))
-                except ValueError:
-                    pass
-            declarado = cabecera.get("total", 0)
-            if declarado:
-                dif = round(suma - declarado, 2)
-                if abs(dif) < 0.01:
-                    self.log(f"El detalle cuadra con Meli: {declarado:,.2f}")
-                else:
-                    self.log(f"OJO: el detalle da {suma:,.2f} y Meli declara "
-                             f"{declarado:,.2f} (difieren {dif:,.2f})")
+            # El descargado ya no hace falta: su contenido esta en el nuestro
+            try:
+                os.remove(descargado)
+            except OSError:
+                pass
 
             resumen = {
-                "filas": len(filas), "con_id": con_id,
-                # Cuantas personas distintas aparecen en la prefactura
-                "con_curp": len({f["id_usuario"] for f in filas
-                                 if f.get("id_usuario")}),
-                "sin_ruta": sin_ruta, "sin_mapa": sin_mapa,
+                "filas": len(nuevas), "con_id": con_id,
+                "con_curp": len({f["id"] for f in mapa.values() if f["id"]}),
+                "sin_ruta": 0, "sin_mapa": sin_id,
                 "periodo": periodo, "desde": desde, "hasta": hasta,
                 "rutas_mapa": len(mapa),
-                "declarado": cabecera.get("total", 0),
-                "suma": suma,
-                "cuadra": abs(round(suma - cabecera.get("total", 0), 2)) < 0.01,
             }
             self.puente.terminado.emit("listo", (resumen, ruta_csv))
 
@@ -410,9 +397,9 @@ class Ventana(QMainWindow):
         # --- tarjetas ---
         rejilla = QGridLayout()
         rejilla.setSpacing(6)
-        self.t_lineas = Tarjeta("Lineas", TEXTO)
+        self.t_lineas = Tarjeta("Filas", TEXTO)
         self.t_id = Tarjeta("Con ID usuario", VERDE)
-        self.t_curp = Tarjeta("Conductores", AZUL)
+        self.t_curp = Tarjeta("Rutas del periodo", AZUL)
         for i, t in enumerate((self.t_lineas, self.t_id, self.t_curp)):
             rejilla.addWidget(t, 0, i)
         raiz.addLayout(rejilla)
@@ -603,7 +590,7 @@ class Ventana(QMainWindow):
             self.archivo = archivo
             self.t_lineas.poner(resumen["filas"])
             self.t_id.poner(resumen["con_id"])
-            self.t_curp.poner(resumen["con_curp"])
+            self.t_curp.poner(resumen["rutas_mapa"])
 
             self.paso.setText("Listo  ·  El archivo ya esta guardado")
             self.b_extraer.setText("Extraer otra vez")
@@ -632,27 +619,19 @@ class Ventana(QMainWindow):
     def _avisar(self, r, archivo):
         detalle = [
             f"Periodo {r['periodo']}  ({r['desde']} a {r['hasta']})",
-            f"{r['con_id']} lineas con ID de usuario",
-            f"{r['con_curp']} conductores distintos",
+            f"{r['con_id']} filas con ID de usuario",
         ]
-        # Lo primero que hay que saber: cuadra con lo que cobra Meli?
-        if r.get("declarado"):
-            if r.get("cuadra"):
-                detalle.insert(1, f"Total {r['declarado']:,.2f} — cuadra con Meli")
-            else:
-                detalle.insert(1, f"OJO: el detalle da {r['suma']:,.2f} y Meli "
-                                  f"declara {r['declarado']:,.2f}")
         if r["sin_mapa"]:
             detalle.append(
                 f"{r['sin_mapa']} rutas no estaban en el reporte del periodo"
             )
-        if r["sin_ruta"]:
-            detalle.append(f"{r['sin_ruta']} lineas sin ID de ruta")
+        detalle.append("El resto del archivo quedo igual al original.")
 
         caja = QMessageBox(self)
-        caja.setWindowTitle("Extraccion completa")
+        caja.setWindowTitle("Prefactura lista")
         caja.setIcon(QMessageBox.Information)
-        caja.setText(f"Se extrajeron {r['filas']} lineas.\n\n" + "\n".join(detalle))
+        caja.setText(f"Se descargo la prefactura completa "
+                     f"({r['filas']} filas).\n\n" + "\n".join(detalle))
         caja.setInformativeText(os.path.basename(archivo))
         abrir = caja.addButton("Abrir carpeta", QMessageBox.AcceptRole)
         caja.addButton("Cerrar", QMessageBox.RejectRole)

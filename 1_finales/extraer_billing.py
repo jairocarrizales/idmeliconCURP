@@ -47,6 +47,8 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
+# Donde Chrome deja lo que descarga, para poder recogerlo
+DESCARGAS = os.path.join(BASE_DIR, "descargas")
 
 # Los periodos de MELI: Q1 = del 1 al 15, Q2 = del 16 al fin de mes
 RE_PERIODO = re.compile(r"^(\d{4})(\d{2})Q(\d)$")
@@ -109,6 +111,17 @@ def crear_driver():
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--lang=es-MX")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+    # Que las descargas caigan donde el programa las pueda encontrar,
+    # sin preguntar dónde guardar cada vez.
+    os.makedirs(DESCARGAS, exist_ok=True)
+    opts.add_experimental_option("prefs", {
+        "download.default_directory": DESCARGAS,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True,
+    })
+
     try:
         return webdriver.Chrome(options=opts)
     except Exception as e:
