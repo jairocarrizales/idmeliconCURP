@@ -161,7 +161,8 @@ class Trabajador(QObject):
 
             # 1) Detalle de la prefactura
             self.log("Paso 1 de 3: detalle de la prefactura...")
-            filas, periodo, _ = nucleo.bajar_detalle(self.driver, id_pref)
+            filas, periodo, crudo = nucleo.bajar_detalle(self.driver, id_pref)
+            cabecera = nucleo.cabecera_prefactura(crudo)
             if not filas:
                 self.puente.fallo.emit(
                     "La prefactura no trajo lineas de detalle.\n\n"
@@ -203,8 +204,27 @@ class Trabajador(QObject):
                 f["nombre"] = info["nombre"]
                 con_id += 1
 
-            ruta_csv = nucleo.guardar(filas, id_pref, periodo)
+            ruta_csv, ruta_tot = nucleo.guardar(filas, id_pref, periodo,
+                                                cabecera)
             self.log(f"Guardado: {os.path.basename(ruta_csv)}")
+            if ruta_tot:
+                self.log(f"Totales : {os.path.basename(ruta_tot)}")
+
+            # Comprobar contra lo que declara Meli
+            suma = 0.0
+            for f in filas:
+                try:
+                    suma += float((f.get("total") or "0").replace(",", ""))
+                except ValueError:
+                    pass
+            declarado = cabecera.get("total", 0)
+            if declarado:
+                dif = round(suma - declarado, 2)
+                if abs(dif) < 0.01:
+                    self.log(f"El detalle cuadra con Meli: {declarado:,.2f}")
+                else:
+                    self.log(f"OJO: el detalle da {suma:,.2f} y Meli declara "
+                             f"{declarado:,.2f} (difieren {dif:,.2f})")
 
             resumen = {
                 "filas": len(filas), "con_id": con_id,
@@ -214,6 +234,9 @@ class Trabajador(QObject):
                 "sin_ruta": sin_ruta, "sin_mapa": sin_mapa,
                 "periodo": periodo, "desde": desde, "hasta": hasta,
                 "rutas_mapa": len(mapa),
+                "declarado": cabecera.get("total", 0),
+                "suma": suma,
+                "cuadra": abs(round(suma - cabecera.get("total", 0), 2)) < 0.01,
             }
             self.puente.terminado.emit("listo", (resumen, ruta_csv))
 
@@ -615,6 +638,13 @@ class Ventana(QMainWindow):
             f"{r['con_id']} lineas con ID de usuario",
             f"{r['con_curp']} conductores distintos",
         ]
+        # Lo primero que hay que saber: cuadra con lo que cobra Meli?
+        if r.get("declarado"):
+            if r.get("cuadra"):
+                detalle.insert(1, f"Total {r['declarado']:,.2f} — cuadra con Meli")
+            else:
+                detalle.insert(1, f"OJO: el detalle da {r['suma']:,.2f} y Meli "
+                                  f"declara {r['declarado']:,.2f}")
         if r["sin_mapa"]:
             detalle.append(
                 f"{r['sin_mapa']} rutas no estaban en el reporte del periodo"
