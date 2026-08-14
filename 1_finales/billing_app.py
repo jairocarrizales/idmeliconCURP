@@ -327,6 +327,13 @@ class Ventana(QMainWindow):
             f" color: {TEXTO}; selection-background-color: {AZUL}; }}"
         )
 
+        eti_anio = QLabel("Año")
+        eti_anio.setStyleSheet(est_etiqueta)
+        self.combo_anio = QComboBox()
+        self.combo_anio.setFixedHeight(28)
+        self.combo_anio.setStyleSheet(est_combo)
+        self.combo_anio.currentIndexChanged.connect(self.al_cambiar_anio)
+
         eti_mes = QLabel("Mes")
         eti_mes.setStyleSheet(est_etiqueta)
         self.combo_mes = QComboBox()
@@ -334,20 +341,22 @@ class Ventana(QMainWindow):
         self.combo_mes.setStyleSheet(est_combo)
         self.combo_mes.currentIndexChanged.connect(self.al_cambiar_mes)
 
-        eti_q = QLabel("Quincena")
+        eti_q = QLabel("Q")
         eti_q.setStyleSheet(est_etiqueta)
         self.combo_q = QComboBox()
         self.combo_q.setFixedHeight(28)
         self.combo_q.setStyleSheet(est_combo)
         self.combo_q.currentIndexChanged.connect(self.al_cambiar_q)
 
+        fila_sel.addWidget(eti_anio)
+        fila_sel.addWidget(self.combo_anio, 2)
         fila_sel.addWidget(eti_mes)
         fila_sel.addWidget(self.combo_mes, 3)
         fila_sel.addWidget(eti_q)
-        fila_sel.addWidget(self.combo_q, 2)
+        fila_sel.addWidget(self.combo_q, 1)
         raiz.addLayout(fila_sel)
 
-        # Que prefactura quedo elegida
+        # Que prefactura quedo elegida (siempre Regular · Last Mile)
         self.elegida = QLabel("Abre Mercado Libre para ver las prefacturas")
         self.elegida.setStyleSheet(
             f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
@@ -355,8 +364,8 @@ class Ventana(QMainWindow):
         )
         raiz.addWidget(self.elegida)
 
-        self.combo_mes.setEnabled(False)
-        self.combo_q.setEnabled(False)
+        for c in (self.combo_anio, self.combo_mes, self.combo_q):
+            c.setEnabled(False)
         self.prefacturas = []      # todas las del listado
         self.actual = None         # la elegida ahora mismo
 
@@ -451,33 +460,54 @@ class Ventana(QMainWindow):
         self.pie.setText("Abriendo Chrome, espera un momento...")
         self.ordenes.abrir.emit()
 
-    def llenar_meses(self, prefacturas):
-        """Llena el desplegable de meses y elige el mas reciente."""
+    def llenar_selectores(self, prefacturas):
+        """Llena los tres desplegables: año actual, ultimo mes, ultimo Q."""
         self.prefacturas = prefacturas
-        meses = lista.meses_disponibles(prefacturas, "regular", "last_mile")
+        anios = lista.anios_disponibles(prefacturas, "regular", "last_mile")
 
-        if not meses:
-            self.elegida.setText(
-                "No hay prefacturas Regular · Last Mile en el listado")
+        if not anios:
+            self.elegida.setText("No hay prefacturas para elegir")
             return
+
+        self.combo_anio.blockSignals(True)
+        self.combo_anio.clear()
+        for a in anios:
+            self.combo_anio.addItem(a, a)
+        # El año en curso si tiene prefacturas; si no, el mas reciente
+        preferido = lista.anio_por_defecto(prefacturas, "regular", "last_mile")
+        i = self.combo_anio.findData(preferido)
+        self.combo_anio.setCurrentIndex(i if i >= 0 else 0)
+        self.combo_anio.blockSignals(False)
+
+        for c in (self.combo_anio, self.combo_mes, self.combo_q):
+            c.setEnabled(True)
+
+        self.escribir(f"{len(prefacturas)} prefacturas en el listado")
+        self.al_cambiar_anio()
+
+    def al_cambiar_anio(self):
+        """Al elegir año, recargar sus meses y quedarse en el ultimo."""
+        anio = self.combo_anio.currentData()
+        if not anio:
+            return
+        meses = lista.meses_de_anio(
+            self.prefacturas, anio, "regular", "last_mile")
 
         self.combo_mes.blockSignals(True)
         self.combo_mes.clear()
         for clave, etiqueta in meses:
             self.combo_mes.addItem(etiqueta, clave)
-        self.combo_mes.setCurrentIndex(0)      # el mas reciente
+        self.combo_mes.setCurrentIndex(0)      # el mes mas reciente
         self.combo_mes.blockSignals(False)
-        self.combo_mes.setEnabled(True)
-        self.combo_q.setEnabled(True)
-
-        self.escribir(f"{len(prefacturas)} prefacturas, "
-                      f"{len(meses)} meses con Regular · Last Mile")
         self.al_cambiar_mes()
 
     def al_cambiar_mes(self):
         """Al elegir mes, recargar sus quincenas y quedarse en la ultima."""
         mes = self.combo_mes.currentData()
         if not mes:
+            self.actual = None
+            self.combo_q.clear()
+            self.elegida.setText("Sin prefacturas ese año")
             return
         quincenas = lista.quincenas_de_mes(
             self.prefacturas, mes, "regular", "last_mile")
@@ -545,7 +575,7 @@ class Ventana(QMainWindow):
             self.ordenes.cargar_lista.emit()
 
         elif etapa == "lista":
-            self.llenar_meses(datos)
+            self.llenar_selectores(datos)
             self.pie.setText("Listo para extraer")
 
         elif etapa == "listado" or etapa == "listo":

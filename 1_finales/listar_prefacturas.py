@@ -13,7 +13,7 @@ Cada prefactura trae lo que hace falta para filtrar:
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime  # para saber el año en curso
 
 API = "https://envios.adminml.com/logistics/billing/api/pre-invoices"
 
@@ -141,19 +141,28 @@ def periodos_de(prefacturas, tipo="regular", milla="last_mile"):
     return [(k, por_periodo[k]) for k in sorted(por_periodo, reverse=True)]
 
 
-def meses_disponibles(prefacturas, tipo="regular", milla="last_mile"):
-    """Los meses con prefactura, del mas reciente al mas viejo.
+def anios_disponibles(prefacturas, tipo="regular", milla="last_mile"):
+    """Los años con prefactura, del mas reciente al mas viejo: ['2026', ...]"""
+    anios = set()
+    for periodo, _ in periodos_de(prefacturas, tipo, milla):
+        if len(periodo) >= 4 and periodo[:4].isdigit():
+            anios.add(periodo[:4])
+    return sorted(anios, reverse=True)
 
-    Devuelve [(clave, etiqueta)], ej. [("202607", "Julio 2026"), ...]
+
+def meses_de_anio(prefacturas, anio, tipo="regular", milla="last_mile"):
+    """Los meses de un año, del mas reciente al mas viejo.
+
+    Devuelve [(clave, etiqueta)], ej. [("202607", "Julio"), ...]
     """
     meses = {}
-    for periodo, lista in periodos_de(prefacturas, tipo, milla):
-        if len(periodo) >= 6:
+    for periodo, _ in periodos_de(prefacturas, tipo, milla):
+        if len(periodo) >= 6 and periodo[:4] == str(anio):
             clave = periodo[:6]
             if clave not in meses:
-                anio, mes = clave[:4], int(clave[4:6])
+                mes = int(clave[4:6])
                 if 1 <= mes <= 12:
-                    meses[clave] = f"{MESES[mes - 1]} {anio}"
+                    meses[clave] = MESES[mes - 1]
     return [(k, meses[k]) for k in sorted(meses, reverse=True)]
 
 
@@ -164,6 +173,15 @@ def quincenas_de_mes(prefacturas, mes, tipo="regular", milla="last_mile"):
         if periodo.startswith(mes):
             salida.append((periodo[6:] or "Q1", lista))
     return salida
+
+
+def anio_por_defecto(prefacturas, tipo="regular", milla="last_mile"):
+    """El año actual si tiene prefacturas; si no, el mas reciente que haya."""
+    anios = anios_disponibles(prefacturas, tipo, milla)
+    if not anios:
+        return ""
+    actual = str(datetime.now().year)
+    return actual if actual in anios else anios[0]
 
 
 def mas_reciente(prefacturas, tipo="regular", milla="last_mile"):
@@ -180,12 +198,18 @@ def mas_reciente(prefacturas, tipo="regular", milla="last_mile"):
     return sorted(lista, key=lambda p: int(p["id"] or 0), reverse=True)[0]
 
 
-def describir(p):
-    """'#6595499 · Regular · Last Mile · 7,151,826.56 MXN · Por pagar'"""
+def describir(p, con_tipo=False):
+    """'#6595499 · 7,151,826.56 MXN · Por pagar'
+
+    El tipo y la milla se omiten: son siempre Regular y Last Mile, asi que
+    repetirlos en cada linea solo agrega ruido. Con con_tipo=True se
+    incluyen, por si algun dia se listan otros.
+    """
     if not p:
         return ""
-    partes = [f"#{p['id']}", bonito(p["tipo"], TIPOS),
-              bonito(p["milla"], MILLAS)]
+    partes = [f"#{p['id']}"]
+    if con_tipo:
+        partes += [bonito(p["tipo"], TIPOS), bonito(p["milla"], MILLAS)]
     try:
         partes.append(f"{float(p['total']):,.2f} MXN")
     except (ValueError, TypeError):

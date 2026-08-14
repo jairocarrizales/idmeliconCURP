@@ -27,17 +27,21 @@ lo ya bajado.
 ## `PrefacturasMeli.exe` — facturación con ID
 
 **No hay que saberse el número.** Al abrir Chrome, el programa consulta el
-listado y llena dos desplegables:
+listado y llena tres desplegables:
 
 ```
-Mes  [ Julio 2026  ▼]    Quincena  [ Q2 ▼]
+Año [ 2026 ▼]   Mes [ Julio ▼]   Q [ Q2 ▼]
 
-#6595499  ·  Regular  ·  Last Mile  ·  7,151,826.56 MXN  ·  Por pagar
+#6595499  ·  7,151,826.56 MXN  ·  Por pagar
 ```
 
-Arranca en el **período más reciente**, así que normalmente solo hay que
-presionar *Extraer TODO*. Solo lista las **Regular · Last Mile** — las
-Complementarias y las de Line Haul quedan fuera.
+Arranca en el **año en curso**, su **último mes con prefactura** y la
+**última quincena**, así que normalmente solo hay que presionar
+*Extraer TODO*.
+
+Solo lista las **Regular · Last Mile** — por eso no aparecen en cada línea:
+son el filtro fijo. Las Complementarias y las de Line Haul quedan fuera.
+En el listado real, el mismo período `202607Q2` tiene las tres.
 
 El CSV que descarga el panel trae el **nombre** del conductor pero no su
 ID, y hay 25 nombres repetidos en el padrón — dos personas distintas
