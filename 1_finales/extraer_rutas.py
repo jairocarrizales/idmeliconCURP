@@ -64,6 +64,15 @@ FICHA = ("https://envios.adminml.com/logistics/monitoring-distribution"
          "/detail/{ruta}?site=MLM")
 LOTE_FICHAS = 12          # medido: 168 rutas en ~12 segundos
 PAUSA_FICHAS = 0.2
+# Chrome se cae en los trabajos largos: en una corrida de 2366 rutas murio
+# a las 1260. Un descanso cada tantas fichas lo evita.
+DESCANSO_CADA = 300
+DESCANSO_SEG = 5
+# Si varios lotes seguidos fallan, algo va mal: cortar en vez de insistir
+MAX_FALLOS_SEGUIDOS = 4
+# Cuanto esperar por un lote. Con 120 s, siete lotes fallidos eran 14
+# minutos de espera inutil.
+TIMEOUT_LOTE = 45
 
 
 def log(msg):
@@ -383,7 +392,7 @@ def pedir_lote_fichas(driver, ids):
         .catch(() => ({id: id, html: ''}))
     )).then(done);
     """
-    driver.set_script_timeout(180)
+    driver.set_script_timeout(TIMEOUT_LOTE)
     respuestas = driver.execute_async_script(script, FICHA, list(ids))
 
     salida = {}
@@ -396,24 +405,61 @@ def pedir_lote_fichas(driver, ids):
     return salida
 
 
+def _chrome_vivo(driver):
+    """Comprueba que la ventana siga abierta antes de insistir."""
+    try:
+        _ = driver.current_url
+        return True
+    except Exception:
+        return False
+
+
 def completar_nombres(driver, registros):
-    """Llena la columna RUTA consultando la ficha de cada una."""
+    """Llena la columna RUTA consultando la ficha de cada una.
+
+    Pedir miles de fichas seguidas agota a Chrome: en una corrida real se
+    cayo a las 1260 con 'target frame detached'. Por eso hay tres defensas:
+
+      - Se descansa cada cierto numero de fichas, para que el navegador
+        libere memoria.
+      - Si un lote falla, se comprueba que Chrome siga vivo antes de seguir;
+        si murio, se corta en vez de insistir con miles de lotes.
+      - Se corta tambien tras varios fallos seguidos, aunque Chrome
+        responda: algo va mal y no vale la pena tardar media hora.
+    """
     pendientes = [r for r in registros if r.get("ID_Ruta")]
     total = len(pendientes)
     if not total:
         return 0
 
     log(f"Trayendo el nombre de {total} rutas en lotes de {LOTE_FICHAS}...")
+    if total > DESCANSO_CADA:
+        log(f"  (con una pausa cada {DESCANSO_CADA}, para no agotar Chrome)")
+
     por_id = {r["ID_Ruta"]: r for r in pendientes}
     hechos = 0
+    fallos_seguidos = 0
     inicio = time.time()
 
     for i in range(0, total, LOTE_FICHAS):
         lote = [r["ID_Ruta"] for r in pendientes[i:i + LOTE_FICHAS]]
         try:
             nombres = pedir_lote_fichas(driver, lote)
+            fallos_seguidos = 0
         except Exception as e:
-            log(f"  Lote fallido: {str(e)[:70]}")
+            fallos_seguidos += 1
+            log(f"  Lote fallido: {resumir(e)}")
+
+            if not _chrome_vivo(driver):
+                log("  Chrome se cerro. Se detiene la busqueda de nombres.")
+                log(f"  Se conservan los {hechos} nombres ya obtenidos.")
+                break
+            if fallos_seguidos >= MAX_FALLOS_SEGUIDOS:
+                log(f"  {fallos_seguidos} lotes seguidos fallaron; se detiene.")
+                log(f"  Se conservan los {hechos} nombres ya obtenidos.")
+                break
+            # Darle aire antes de reintentar
+            time.sleep(3)
             continue
 
         for id_ruta, nombre in nombres.items():
@@ -426,12 +472,26 @@ def completar_nombres(driver, registros):
         if procesados % 60 < LOTE_FICHAS or procesados == total:
             transcurrido = time.time() - inicio
             ritmo = procesados / transcurrido if transcurrido else 0
-            log(f"  {procesados}/{total} ({ritmo:.0f}/s)")
+            faltan = (total - procesados) / ritmo if ritmo else 0
+            log(f"  {procesados}/{total} ({ritmo:.0f}/s, "
+                f"faltan ~{faltan / 60:.0f} min)")
 
-        time.sleep(PAUSA_FICHAS)
+        # Un respiro cada tantas fichas: sin esto Chrome se cae en los
+        # trabajos largos
+        if procesados % DESCANSO_CADA < LOTE_FICHAS and procesados < total:
+            log(f"  Pausa de {DESCANSO_SEG} s para que Chrome respire...")
+            time.sleep(DESCANSO_SEG)
+        else:
+            time.sleep(PAUSA_FICHAS)
 
     log(f"Nombres obtenidos: {hechos}/{total}")
     return hechos
+
+
+def resumir(e):
+    """El mensaje util del error, sin el stacktrace de Selenium."""
+    t = str(e).split("Stacktrace:")[0].split("\n")[0].strip()
+    return " ".join(t.split())[:90]
 
 
 def servicio_desde_vehiculo(vehiculo):
@@ -559,6 +619,10 @@ def main():
         print()
         print(f"    Con ID de usuario   {con_id}/{len(registros)}")
         print(f"    Con nombre de ruta  {con_nombre}/{len(registros)}")
+        if con_nombre < len(registros):
+            faltan = len(registros) - con_nombre
+            print(f"      ({faltan} sin nombre: Chrome no alcanzo a leer sus")
+            print("       fichas. Vuelve a correrlo con un rango mas corto)")
         print(f"    Service Partner     {conteo['SP']}")
         print(f"    RD / SDD            {conteo['RD']}")
         if conteo["?"]:
