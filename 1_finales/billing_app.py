@@ -204,11 +204,8 @@ class Trabajador(QObject):
                 f["nombre"] = info["nombre"]
                 con_id += 1
 
-            ruta_csv, ruta_tot = nucleo.guardar(filas, id_pref, periodo,
-                                                cabecera)
+            ruta_csv = nucleo.guardar(filas, id_pref, periodo, cabecera)
             self.log(f"Guardado: {os.path.basename(ruta_csv)}")
-            if ruta_tot:
-                self.log(f"Totales : {os.path.basename(ruta_tot)}")
 
             # Comprobar contra lo que declara Meli
             suma = 0.0

@@ -53,9 +53,8 @@ prefactura (ruta 147326006)
 ID usuario 4965727
 ```
 
-Salida: **`JulioQ2.csv`** más **`JulioQ2_totales.csv`**. El nombre es el
-período, sin el año. Si ya existe uno igual no lo pisa: escribe
-`JulioQ2 (2).csv`.
+Salida: **un solo archivo**, `JulioQ2.csv`. El nombre es el período, sin
+el año. Si ya existe uno igual no lo pisa: escribe `JulioQ2 (2).csv`.
 
 ```
 ID prefactura | Periodo | Estado | ID ruta | ID usuario | Nombre |
@@ -65,22 +64,26 @@ Placa | Concepto | Tipo | Fecha inicio | Fecha fin | Cantidad | Costo | Total
 Las tres primeras columnas se repiten en cada fila a propósito: así el
 archivo **se identifica solo** aunque lo renombren o lo bajen dos veces.
 
-### El archivo de totales
+### Los totales, al final del mismo archivo
 
-Trae los tres totales tal como los declara Mercado Libre, y la suma del
-detalle al lado para comprobar que cuadran:
+Cierra con los totales que declara MELI, en el mismo formato que traía la
+prefactura original —etiqueta a la izquierda, monto a la derecha— más una
+línea que comprueba contra la suma del detalle:
 
 ```
-Total servicios      6266264.00
-Total adicionales     235653.00
-Total penalidades     -63461.52
-TOTAL PREFACTURA     6438455.48
-
-SUMA DETALLE         6438455.48   2442 filas
-Diferencia                 0.00   CUADRA
+Total servicios:                                    +  6266264.00
+Total adicionales:                                   +  235653.00
+Total penalidades:                                    -  63461.52
+Total prefactura:                                   +  6438455.48
+Suma del detalle:                                      6438455.48
+CUADRA                                                       0.00
 ```
 
-Sin esto, el sistema puede sumar mal 2,600 filas y nadie se entera.
+Sin esto, el sistema puede sumar mal 2,600 filas y nadie se entera. Si los
+números no coinciden, la última línea dice `NO CUADRA` y la diferencia.
+
+Para quedarse solo con el detalle, basta filtrar por la columna `Tipo`
+(`service`, `additional`, `penalty`): las filas de totales la traen vacía.
 
 ### El signo de las penalidades
 

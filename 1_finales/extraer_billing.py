@@ -481,14 +481,15 @@ def nombre_archivo(periodo, id_pref=""):
 
 
 def guardar(filas, id_pref, periodo="", cabecera=None):
-    """Escribe el CSV del detalle y, aparte, el de totales.
+    """Escribe UN solo CSV: el detalle y, al final, los totales de Meli.
 
     La tabla sigue siendo plana con una sola fila de encabezado. El id de
     prefactura y el periodo van EN CADA FILA, no en el nombre del archivo:
     asi el archivo se identifica solo aunque lo renombren.
 
-    Los totales que declara Meli van en un segundo archivo pequeño, para no
-    romper la tabla con filas de otro formato.
+    Los totales declarados van en las ultimas filas, con el Concepto como
+    etiqueta y el monto en la columna Total. Van despues de una fila vacia
+    para que se distingan del detalle de un vistazo.
     """
     base = nombre_archivo(periodo, id_pref)
     ruta_csv = os.path.join(BASE_DIR, base + ".csv")
@@ -527,70 +528,54 @@ def guardar(filas, id_pref, periodo="", cabecera=None):
         for fila in filas:
             w.writerow(campos(fila))
 
-    ruta_totales = ""
-    if c:
-        ruta_totales = guardar_totales(filas, c, base)
+        if c:
+            for fila in filas_de_totales(filas, c, len(cab)):
+                w.writerow(fila)
 
-    return ruta_csv, ruta_totales
+    return ruta_csv
 
 
-def guardar_totales(filas, c, base):
-    """El archivo de totales: los de Meli contra la suma del detalle.
+def filas_de_totales(filas, c, ancho):
+    """Las filas de totales que cierran el archivo.
 
-    Sin esto no hay forma de comprobar que lo que suma el sistema es lo que
-    Mercado Libre cobra: se pueden sumar mal 2,649 filas y nadie se entera.
+    Se imitan las del formato original de la prefactura, que cerraba asi:
+
+        Total adicionales:     ;;;;;;;;+  257026
+        Total penalidades:     ;;;;;;;;-  84175.44
+        Total prefactura:      ;;;;;;;;+  7151827
+
+    o sea: la etiqueta en la primera columna, el monto en la ultima, y el
+    resto vacio. Se agrega el total de servicios (que el original no traia
+    suelto) y una comprobacion contra la suma del detalle.
     """
-    ruta = os.path.join(BASE_DIR, base + "_totales.csv")
-
-    # Sumar el detalle, con el signo ya aplicado
     sumas = {}
     for f in filas:
-        tipo = f.get("tipo") or "(sin tipo)"
         try:
-            sumas[tipo] = sumas.get(tipo, 0.0) + float(
-                (f.get("total") or "0").replace(",", ""))
+            sumas[f.get("tipo") or ""] = sumas.get(f.get("tipo") or "", 0.0) + \
+                float((f.get("total") or "0").replace(",", ""))
         except ValueError:
             pass
     suma_detalle = sum(sumas.values())
-
-    filas_out = [
-        ("ID prefactura", c.get("id", ""), ""),
-        ("Periodo", c.get("periodo", ""), ""),
-        ("Tipo", c.get("tipo", ""), ""),
-        ("Milla", c.get("milla", ""), ""),
-        ("Estado", c.get("estado", ""), ""),
-        ("Transportadora", c.get("transportadora", ""), ""),
-        ("", "", ""),
-        ("--- Totales declarados por Mercado Libre ---", "", ""),
-        ("Total servicios", f"{c.get('servicios', 0):.2f}", ""),
-        ("Total adicionales", f"{c.get('adicionales', 0):.2f}", ""),
-        ("Total penalidades", f"-{c.get('penalidades', 0):.2f}", ""),
-        ("TOTAL PREFACTURA", f"{c.get('total', 0):.2f}", ""),
-        ("", "", ""),
-        ("--- Suma del detalle de este archivo ---", "", ""),
-    ]
-    for tipo in sorted(sumas):
-        filas_out.append((f"Suma {tipo}", f"{sumas[tipo]:.2f}",
-                          f"{sum(1 for f in filas if f.get('tipo') == tipo)} filas"))
-    filas_out.append(("SUMA DETALLE", f"{suma_detalle:.2f}",
-                      f"{len(filas)} filas"))
-
-    # La comprobacion que importa: cuadra o no
     declarado = c.get("total", 0)
     diferencia = round(suma_detalle - declarado, 2)
-    filas_out += [
-        ("", "", ""),
-        ("Diferencia", f"{diferencia:.2f}",
-         "CUADRA" if abs(diferencia) < 0.01 else "NO CUADRA"),
+
+    def fila(etiqueta, monto):
+        """Etiqueta en la primera columna, monto en la ultima."""
+        f = [""] * ancho
+        f[0] = etiqueta
+        f[ancho - 1] = monto
+        return f
+
+    return [
+        [""] * ancho,                   # separa del detalle
+        fila("Total servicios:", f"+  {c.get('servicios', 0):.2f}"),
+        fila("Total adicionales:", f"+  {c.get('adicionales', 0):.2f}"),
+        fila("Total penalidades:", f"-  {c.get('penalidades', 0):.2f}"),
+        fila("Total prefactura:", f"+  {declarado:.2f}"),
+        fila("Suma del detalle:", f"{suma_detalle:.2f}"),
+        fila("CUADRA" if abs(diferencia) < 0.01 else "NO CUADRA",
+             f"{diferencia:.2f}"),
     ]
-
-    with io.open(ruta, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
-        w.writerow(["Concepto", "Monto", "Nota"])
-        for fila in filas_out:
-            w.writerow(fila)
-
-    return ruta
 
 
 def main():
@@ -678,8 +663,8 @@ def main():
                 # Sin padron, al menos el nombre del reporte
                 f["nombre"] = info["nombre"]
 
-        ruta_csv, ruta_tot = guardar(filas, id_pref, periodo,
-                                     cabecera_prefactura(cabecera))
+        ruta_csv = guardar(filas, id_pref, periodo,
+                           cabecera_prefactura(cabecera))
 
         con_curp = sum(1 for f in filas if f.get("curp"))
         print()
@@ -694,9 +679,7 @@ def main():
         if sin_mapa:
             print(f"    Ruta no encontrada  {sin_mapa}  en el reporte del periodo")
         print()
-        print(f"  CSV     : {ruta_csv}")
-        if ruta_tot:
-            print(f"  Totales : {ruta_tot}")
+        print(f"  CSV: {ruta_csv}")
         print("=" * 70)
 
     except Exception as e:
