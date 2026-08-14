@@ -44,15 +44,26 @@ else:
 
 PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
 
-# Las columnas del control que se pueden llenar con datos reales.
-# Se dejaron fuera CODIGO_POSTAL, TIPO_DE_VEHICULO, Tipo_de_ruta y RUTA:
-# no existen en ninguna de las dos APIs, y una columna vacia estorba al
-# cargar el archivo a un sistema.
+# Las columnas del control, en su orden.
+# TIPO_DE_VEHICULO, Tipo_de_ruta y CODIGO_POSTAL se dejan VACIAS a
+# proposito: no existen en ninguna fuente de MELI, y verlas en blanco
+# recuerda que hay que capturarlas aparte.
 COLUMNAS = [
     "FECHA", "CEDIS_MELI", "ID_USUARIO", "DRIVER", "Vehiculo", "Placas",
-    "Tipo_de_servicio", "ZONA_DE_RUTA", "ID_Ruta", "SPR", "ENTREGADOS",
-    "FALLIDOS", "KM", "NO_VISITADOS", "PROD_HORA", "PERFORMANCE",
+    "TIPO_DE_VEHICULO", "Tipo_de_servicio", "Tipo_de_ruta", "ZONA_DE_RUTA",
+    "CODIGO_POSTAL", "RUTA", "ID_Ruta", "SPR", "ENTREGADOS", "FALLIDOS",
+    "KM", "NO_VISITADOS", "PROD_HORA", "PERFORMANCE",
 ]
+
+# Las que no vienen de MELI: se reportan al final para tenerlas presentes
+SIN_FUENTE = ("TIPO_DE_VEHICULO", "Tipo_de_ruta", "CODIGO_POSTAL")
+
+# El nombre de la ruta (C1_AM1) no viene por API: la ficha llega del
+# servidor con el ya puesto. Se lee del HTML, que tarda 0.7 s por ruta.
+FICHA = ("https://envios.adminml.com/logistics/monitoring-distribution"
+         "/detail/{ruta}?site=MLM")
+LOTE_FICHAS = 12          # medido: 168 rutas en ~12 segundos
+PAUSA_FICHAS = 0.2
 
 
 def log(msg):
@@ -314,9 +325,13 @@ def bajar_reporte(driver, desde, hasta):
             "DRIVER": celda(f, "driver"),
             "Vehiculo": celda(f, "vehiculo"),
             "Placas": celda(f, "placa"),
+            "TIPO_DE_VEHICULO": "",      # no viene de MELI
             "Tipo_de_servicio": celda(f, "servicio"),
+            "Tipo_de_ruta": "",          # no viene de MELI
             # El municipio visitado es lo que el control llama zona de ruta
             "ZONA_DE_RUTA": celda(f, "municipio"),
+            "CODIGO_POSTAL": "",         # no viene de MELI
+            "RUTA": "",                  # se llena leyendo la ficha
             "ID_Ruta": ruta,
             "SPR": celda(f, "spr"),
             "ENTREGADOS": celda(f, "entregados"),
@@ -329,6 +344,94 @@ def bajar_reporte(driver, desde, hasta):
 
     log(f"  {len(registros)} rutas en el reporte")
     return registros
+
+
+RE_NOMBRE_RUTA = re.compile(r"Ruta\s+([A-Z0-9]{1,4}_[A-Z0-9_]{2,14})")
+
+
+def nombre_del_html(html):
+    """Saca 'C1_AM1' del HTML de la ficha.
+
+    Se prueban varias formas por si cambia el marcado: el texto "Ruta X",
+    un campo JSON incrustado, o el nombre entre etiquetas.
+    """
+    m = RE_NOMBRE_RUTA.search(html)
+    if m:
+        return m.group(1)
+    for clave in ("routeName", "route_name", "plannedRouteName"):
+        m = re.search(rf'"{clave}"\s*:\s*"([A-Z0-9]{{1,4}}_[A-Z0-9_]{{2,14}})"',
+                      html)
+        if m:
+            return m.group(1)
+    m = re.search(r">\s*([A-Z]{1,4}\d{0,3}_[A-Z0-9_]{2,14})\s*<", html)
+    return m.group(1) if m else ""
+
+
+def pedir_lote_fichas(driver, ids):
+    """Trae el HTML de varias fichas a la vez y devuelve {id: nombre}.
+
+    El tiempo lo domina la latencia (0.7 s por ficha), asi que pedirlas en
+    paralelo es donde esta la ganancia: 168 rutas en ~12 s.
+    """
+    script = """
+    const [plantilla, ids] = arguments;
+    const done = arguments[arguments.length - 1];
+    Promise.all(ids.map(id =>
+      fetch(plantilla.replace('{ruta}', id), {credentials: 'include'})
+        .then(r => r.ok ? r.text() : '')
+        .then(t => ({id: id, html: t}))
+        .catch(() => ({id: id, html: ''}))
+    )).then(done);
+    """
+    driver.set_script_timeout(180)
+    respuestas = driver.execute_async_script(script, FICHA, list(ids))
+
+    salida = {}
+    for r in respuestas or []:
+        if not r or not r.get("html"):
+            continue
+        nombre = nombre_del_html(r["html"])
+        if nombre:
+            salida[str(r["id"])] = nombre
+    return salida
+
+
+def completar_nombres(driver, registros):
+    """Llena la columna RUTA consultando la ficha de cada una."""
+    pendientes = [r for r in registros if r.get("ID_Ruta")]
+    total = len(pendientes)
+    if not total:
+        return 0
+
+    log(f"Trayendo el nombre de {total} rutas en lotes de {LOTE_FICHAS}...")
+    por_id = {r["ID_Ruta"]: r for r in pendientes}
+    hechos = 0
+    inicio = time.time()
+
+    for i in range(0, total, LOTE_FICHAS):
+        lote = [r["ID_Ruta"] for r in pendientes[i:i + LOTE_FICHAS]]
+        try:
+            nombres = pedir_lote_fichas(driver, lote)
+        except Exception as e:
+            log(f"  Lote fallido: {str(e)[:70]}")
+            continue
+
+        for id_ruta, nombre in nombres.items():
+            reg = por_id.get(id_ruta)
+            if reg:
+                reg["RUTA"] = nombre
+                hechos += 1
+
+        procesados = min(i + LOTE_FICHAS, total)
+        if procesados % 60 < LOTE_FICHAS or procesados == total:
+            transcurrido = time.time() - inicio
+            ritmo = procesados / transcurrido if transcurrido else 0
+            log(f"  {procesados}/{total} ({ritmo:.0f}/s)")
+
+        time.sleep(PAUSA_FICHAS)
+
+    log(f"Nombres obtenidos: {hechos}/{total}")
+    return hechos
 
 
 def servicio_desde_vehiculo(vehiculo):
@@ -438,18 +541,33 @@ def main():
             return
 
         conteo = clasificar(registros)
+
+        # El nombre de la ruta se lee de la ficha: ~12 s para 168
+        try:
+            completar_nombres(driver, registros)
+        except Exception as e:
+            log(f"No se pudieron traer los nombres: {str(e)[:110]}")
+            log("Se continua sin la columna RUTA.")
+
         txt, csvf = guardar(registros, desde, hasta)
 
         con_id = sum(1 for r in registros if r.get("ID_USUARIO"))
+        con_nombre = sum(1 for r in registros if r.get("RUTA"))
         print()
         print("=" * 70)
         print(f"  LISTO. {len(registros)} rutas del {desde} al {hasta}")
         print()
         print(f"    Con ID de usuario   {con_id}/{len(registros)}")
+        print(f"    Con nombre de ruta  {con_nombre}/{len(registros)}")
         print(f"    Service Partner     {conteo['SP']}")
         print(f"    RD / SDD            {conteo['RD']}")
         if conteo["?"]:
             print(f"    Sin clasificar      {conteo['?']}")
+        print()
+        print("  Columnas que quedan VACIAS (hay que capturarlas aparte,")
+        print("  no existen en ninguna fuente de Mercado Libre):")
+        for c in SIN_FUENTE:
+            print(f"    - {c}")
         print()
         print(f"  TXT: {txt}")
         print(f"  CSV: {csvf}")

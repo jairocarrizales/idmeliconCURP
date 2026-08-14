@@ -1,0 +1,17 @@
+﻿DONDE ESTA EL NOMBRE DE LA RUTA
+Fecha: 2026-08-13 17:47:25
+Ruta: 151255890   Nombre en pantalla: C1_AM1
+==========================================================================
+
+No se encontro el nombre en ninguna respuesta.
+Quiza la pagina lo arma desde el HTML del servidor.
+
+
+PETICIONES OBSERVADAS
+==========================================================================
+GET  https://envios.adminml.com/logistics/api/monitoring-route/distance-traveled?routeId=151255890&routeType=last_mile&siteId=MLM
+POST  https://envios.adminml.com/logistics/api/monitoring-route/get-routes-notes-quantities?siteId=MLM
+GET  https://envios.adminml.com/logistics/api/monitoring-route/trace?traceType=planned&plannedRouteId=502632738001&siteId=MLM
+GET  https://envios.adminml.com/logistics/api/monitoring-route/trace?traceType=executed&routeId=151255890&routeType=last_mile&initDate=1786542968&finishDate=1786562972&siteId=MLM
+GET  https://kraken-frm.adminml.com/api/pidgey/modules/bell/user/unread
+GET  https://kraken-frm.adminml.com/api/pidgey/modules/bell/user/latest
