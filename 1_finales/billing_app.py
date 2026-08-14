@@ -20,7 +20,7 @@ from PySide6.QtGui import QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QPlainTextEdit, QFrame, QMessageBox, QGridLayout,
-    QSizePolicy, QLineEdit, QComboBox,
+    QSizePolicy, QLineEdit, QComboBox, QFileDialog,
 )
 
 import extraer_billing as nucleo
@@ -87,6 +87,7 @@ class Ordenes(QObject):
     abrir = Signal()
     cargar_lista = Signal()
     extraer = Signal(str)
+    procesar = Signal(str)      # un CSV descargado a mano
     cerrar = Signal()
 
 
@@ -162,70 +163,120 @@ class Trabajador(QObject):
 
             # 1) El CSV tal como lo genera MELI, presionando su boton
             self.log("Paso 1 de 3: descargando la prefactura...")
-            descargado = inyectar.bajar_csv(
-                self.driver, id_pref, nucleo.DESCARGAS, log=self.log)
-
-            texto = inyectar.leer_archivo(descargado)
-            filas_csv = inyectar.leer_csv(texto)
-            periodo = inyectar.periodo_del_csv(filas_csv) or ""
-            self.log(f"  {len(filas_csv)} filas, periodo {periodo or '?'}")
-
-            # 2) Reporte de operacion: dice que conductor hizo cada ruta.
-            #    Se pide el rango REAL del archivo, no el del periodo: una
-            #    prefactura de la 2a quincena trae rutas rezagadas de junio,
-            #    y pedir solo su periodo dejaba 144 filas sin id.
-            desde, hasta = inyectar.rango_de_fechas(filas_csv)
-            if not desde:
-                desde, hasta = nucleo.periodo_a_fechas(periodo)
-            if not desde:
+            try:
+                descargado = inyectar.bajar_csv(
+                    self.driver, id_pref, nucleo.DESCARGAS, log=self.log)
+            except Exception as e:
+                # A veces no hay enlace de descarga, o el dialogo cambia.
+                # En vez de fallar, se ofrece cargar el archivo a mano.
+                self.log(f"No se pudo descargar: {str(e)[:120]}")
                 self.puente.fallo.emit(
-                    f"No se pudo determinar el rango de fechas.\n\n"
-                    f"Periodo leido: '{periodo}'"
+                    "MANUAL:No se pudo descargar la prefactura desde la "
+                    "pagina.\n\n"
+                    "Descargala tu mismo desde Chrome (Descargar > CSV) y "
+                    "luego presiona 'Cargar archivo' para procesarla."
                 )
                 return
 
-            self.log(f"Paso 2 de 3: reporte de operacion, {desde} a {hasta}...")
-            mapa = {}
-            try:
-                mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
-            except Exception as e:
-                self.log(f"No se pudo traer el reporte: {str(e)[:120]}")
-                self.log("Se continua sin ID de usuario.")
-
-            # 3) Insertar la columna, sin tocar nada mas
-            self.log("Paso 3 de 3: insertando el ID junto al conductor...")
-            nuevas, con_id, sin_id = inyectar.insertar_id(
-                filas_csv, mapa, log=self.log)
-
-            base = nucleo.nombre_archivo(periodo, id_pref)
-            ruta_csv = os.path.join(nucleo.BASE_DIR, base + ".csv")
-            if os.path.exists(ruta_csv):
-                n = 2
-                while os.path.exists(
-                        os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")):
-                    n += 1
-                ruta_csv = os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")
-
-            inyectar.escribir_csv(nuevas, ruta_csv)
-            self.log(f"Guardado: {os.path.basename(ruta_csv)}")
-
-            # El descargado ya no hace falta: su contenido esta en el nuestro
-            try:
-                os.remove(descargado)
-            except OSError:
-                pass
-
-            resumen = {
-                "filas": len(nuevas), "con_id": con_id,
-                "con_curp": len({f["id"] for f in mapa.values() if f["id"]}),
-                "sin_ruta": 0, "sin_mapa": sin_id,
-                "periodo": periodo, "desde": desde, "hasta": hasta,
-                "rutas_mapa": len(mapa),
-            }
-            self.puente.terminado.emit("listo", (resumen, ruta_csv))
+            self._procesar(descargado, id_pref, borrar=True)
 
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
+
+    @Slot(str)
+    def procesar_archivo(self, ruta):
+        """Procesa un CSV que el usuario descargo a mano.
+
+        Sirve cuando la pagina no ofrece el enlace de descarga: el archivo
+        se baja manualmente y aqui se le inyectan los ids igual.
+        """
+        try:
+            if not self.driver:
+                self.puente.fallo.emit(
+                    "Primero hay que abrir Chrome: el reporte de operacion "
+                    "se pide con tu sesion."
+                )
+                return
+            self.log(f"Procesando {os.path.basename(ruta)}...")
+            self._procesar(ruta, "", borrar=False)
+        except Exception as e:
+            self.puente.fallo.emit(self._explicar(e))
+
+    def _procesar(self, ruta_archivo, id_pref="", borrar=False):
+        """Lee el CSV, le inyecta los ids y lo guarda.
+
+        Lo comparten las dos vias: la descarga automatica y el archivo que
+        carga el usuario.
+        """
+        texto = inyectar.leer_archivo(ruta_archivo)
+        filas_csv = inyectar.leer_csv(texto)
+
+        # Comprobar que es lo que esperamos antes de seguir
+        i_cab, _ = inyectar.indice_cabecera(filas_csv)
+        if i_cab is None:
+            self.puente.fallo.emit(
+                "El archivo no parece una prefactura de Mercado Libre.\n\n"
+                "No se encontro la columna 'Conductor'. Revisa que sea el "
+                "CSV del detalle, no el PDF ni otro reporte."
+            )
+            return
+
+        periodo = inyectar.periodo_del_csv(filas_csv) or ""
+        id_pref = id_pref or inyectar.id_prefactura_del_csv(filas_csv)
+        self.log(f"  {len(filas_csv)} filas, periodo {periodo or '?'}"
+                 + (f", prefactura {id_pref}" if id_pref else ""))
+
+        # El rango REAL del archivo, no el del periodo: una prefactura
+        # arrastra cargos rezagados de semanas anteriores.
+        desde, hasta = inyectar.rango_de_fechas(filas_csv)
+        if not desde:
+            desde, hasta = nucleo.periodo_a_fechas(periodo)
+        if not desde:
+            self.puente.fallo.emit(
+                f"No se pudo determinar el rango de fechas.\n\n"
+                f"Periodo leido: '{periodo or '(ninguno)'}'"
+            )
+            return
+
+        self.log(f"Reporte de operacion, {desde} a {hasta}...")
+        mapa = {}
+        try:
+            mapa = nucleo.bajar_mapa_rutas(self.driver, desde, hasta)
+        except Exception as e:
+            self.log(f"No se pudo traer el reporte: {str(e)[:120]}")
+            self.log("Se continua sin ID de usuario.")
+
+        self.log("Insertando el ID junto al conductor...")
+        nuevas, con_id, sin_id = inyectar.insertar_id(
+            filas_csv, mapa, log=self.log)
+
+        base = nucleo.nombre_archivo(periodo, id_pref)
+        ruta_csv = os.path.join(nucleo.BASE_DIR, base + ".csv")
+        if os.path.exists(ruta_csv):
+            n = 2
+            while os.path.exists(
+                    os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")):
+                n += 1
+            ruta_csv = os.path.join(nucleo.BASE_DIR, f"{base} ({n}).csv")
+
+        inyectar.escribir_csv(nuevas, ruta_csv)
+        self.log(f"Guardado: {os.path.basename(ruta_csv)}")
+
+        if borrar:
+            # El descargado ya no hace falta: su contenido esta en el nuestro
+            try:
+                os.remove(ruta_archivo)
+            except OSError:
+                pass
+
+        resumen = {
+            "filas": len(nuevas), "con_id": con_id,
+            "con_curp": len({f["id"] for f in mapa.values() if f["id"]}),
+            "sin_ruta": 0, "sin_mapa": sin_id,
+            "periodo": periodo, "desde": desde, "hasta": hasta,
+            "rutas_mapa": len(mapa),
+        }
+        self.puente.terminado.emit("listo", (resumen, ruta_csv))
 
     @Slot()
     def cerrar(self):
@@ -290,8 +341,8 @@ class Ventana(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Prefacturas con ID - Mercado Libre")
-        self.resize(620, 470)
-        self.setMinimumSize(540, 420)
+        self.resize(620, 505)
+        self.setMinimumSize(540, 450)
         self.archivo = None        # el CSV generado
         self._armar()
         self._hilo()
@@ -394,6 +445,14 @@ class Ventana(QMainWindow):
         self.b_extraer.setEnabled(False)
         self.b_carpeta.setEnabled(False)
 
+        # Salida alterna: si la pagina no ofrece el enlace de descarga,
+        # se baja el CSV a mano y se procesa desde aqui.
+        self.b_cargar = self._boton(
+            "Cargar un CSV descargado a mano", PANEL)
+        self.b_cargar.clicked.connect(self.al_cargar_archivo)
+        self.b_cargar.setMinimumHeight(26)
+        raiz.addWidget(self.b_cargar)
+
         # --- tarjetas ---
         rejilla = QGridLayout()
         rejilla.setSpacing(6)
@@ -446,6 +505,7 @@ class Ventana(QMainWindow):
         self.ordenes.abrir.connect(self.trabajador.abrir_navegador)
         self.ordenes.cargar_lista.connect(self.trabajador.cargar_lista)
         self.ordenes.extraer.connect(self.trabajador.extraer)
+        self.ordenes.procesar.connect(self.trabajador.procesar_archivo)
         self.ordenes.cerrar.connect(self.trabajador.cerrar)
 
         self.puente.mensaje.connect(self.escribir)
@@ -564,6 +624,22 @@ class Ventana(QMainWindow):
                       f"({lista.periodo_legible(self.actual['periodo'])})...")
         self.ordenes.extraer.emit(id_pref)
 
+    def al_cargar_archivo(self):
+        """Deja elegir un CSV descargado a mano y lo procesa."""
+        inicio = nucleo.DESCARGAS if os.path.isdir(nucleo.DESCARGAS) else (
+            os.path.join(os.path.expanduser("~"), "Downloads"))
+        ruta, _ = QFileDialog.getOpenFileName(
+            self, "Elige el CSV de la prefactura", inicio,
+            "Prefacturas (*.csv);;Todos los archivos (*.*)")
+        if not ruta:
+            return
+
+        self.b_cargar.setEnabled(False)
+        self.b_cargar.setText("Procesando...")
+        self.pie.setText("Procesando el archivo. Puedes seguir usando la PC.")
+        self.escribir(f"Archivo elegido: {os.path.basename(ruta)}")
+        self.ordenes.procesar.emit(ruta)
+
     def al_carpeta(self):
         destino = os.path.dirname(self.archivo) if self.archivo else _carpeta_base()
         QDesktopServices.openUrl(QUrl.fromLocalFile(destino))
@@ -597,24 +673,48 @@ class Ventana(QMainWindow):
             self.b_extraer.setEnabled(True)
             self.b_carpeta.setEnabled(True)
             self.b_carpeta.setProperty("listo", True)
+            self.b_cargar.setEnabled(True)
+            self.b_cargar.setText("Cargar un CSV descargado a mano")
             self.pie.setText(f"{resumen['filas']} lineas guardadas")
             self._avisar(resumen, archivo)
 
     def al_fallar(self, mensaje):
-        self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
+        # El prefijo MANUAL: marca los fallos que se resuelven cargando
+        # el archivo a mano, no son un error cualquiera
+        manual = mensaje.startswith("MANUAL:")
+        if manual:
+            mensaje = mensaje[len("MANUAL:"):]
+
+        self.escribir(f"{'AVISO' if manual else 'ERROR'}: "
+                      f"{mensaje.splitlines()[0]}")
         self.b_abrir.setEnabled(True)
         self.b_extraer.setText("2 · Extraer TODO")
+        self.b_cargar.setEnabled(True)
+        self.b_cargar.setText("Cargar un CSV descargado a mano")
         for b in (self.b_extraer, self.b_carpeta):
             if b.property("listo") is True:
                 b.setEnabled(True)
+
         aviso = QMessageBox(self)
-        aviso.setWindowTitle("Algo salio mal")
-        aviso.setIcon(QMessageBox.Warning)
+        aviso.setWindowTitle("Hay que cargarlo a mano" if manual
+                             else "Algo salio mal")
+        aviso.setIcon(QMessageBox.Information if manual
+                      else QMessageBox.Warning)
         aviso.setText(mensaje)
+        if manual:
+            elegir = aviso.addButton("Elegir archivo...",
+                                     QMessageBox.AcceptRole)
+            aviso.addButton("Ahora no", QMessageBox.RejectRole)
         aviso.show()
         barra_titulo_oscura(aviso)
         aviso.exec()
-        self.pie.setText("Ocurrio un error, revisa el registro")
+
+        if manual and aviso.clickedButton() is elegir:
+            self.al_cargar_archivo()
+            return
+
+        self.pie.setText("Descarga el CSV y presiona 'Cargar un CSV'"
+                         if manual else "Ocurrio un error, revisa el registro")
 
     def _avisar(self, r, archivo):
         detalle = [

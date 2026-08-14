@@ -53,6 +53,24 @@ prefactura (ruta 147326006)
 ID usuario 4965727
 ```
 
+### Si la descarga automática falla
+
+A veces la página no ofrece el enlace, o el diálogo cambia. Cuando pasa, el
+programa **no se queda a medias**: avisa y ofrece la salida manual.
+
+```
+Cargar un CSV descargado a mano
+```
+
+Descargas el CSV desde Chrome como siempre (*Descargar → CSV*), presionas
+ese botón y eliges el archivo. El resto es idéntico: lee sus fechas, pide
+el reporte del rango correcto e inyecta los IDs.
+
+Tu archivo no se toca — el resultado se guarda aparte.
+
+Si eliges un archivo que no es una prefactura, lo detecta y lo dice, en vez
+de escribir un resultado sin sentido.
+
 Salida: **un solo archivo**, `JulioQ2.csv`. El nombre es el período, sin
 el año. Si ya existe uno igual no lo pisa: escribe `JulioQ2 (2).csv`.
 
