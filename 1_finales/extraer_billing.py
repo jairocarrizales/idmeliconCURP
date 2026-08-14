@@ -409,11 +409,35 @@ def bajar_mapa_rutas(driver, desde, hasta):
     return mapa
 
 
-def guardar(filas, id_pref):
-    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"billing_{id_pref}_{sello}"
-    ruta_txt = os.path.join(BASE_DIR, base + ".txt")
+MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+         "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+
+def nombre_archivo(periodo, id_pref=""):
+    """'202607Q2' -> 'JulioQ2'.
+
+    Sin el año, como se pidio. Si el periodo no se entiende, se cae al
+    numero de prefactura para no dejar el archivo sin nombre.
+    """
+    p = (periodo or "").strip()
+    if len(p) >= 7 and p[:4].isdigit() and p[4:6].isdigit():
+        mes = int(p[4:6])
+        if 1 <= mes <= 12:
+            return f"{MESES[mes - 1]}{p[6:]}"
+    return f"billing_{id_pref}" if id_pref else "billing"
+
+
+def guardar(filas, id_pref, periodo=""):
+    """Escribe el CSV. Solo CSV: el TXT duplicaba el mismo contenido."""
+    base = nombre_archivo(periodo, id_pref)
     ruta_csv = os.path.join(BASE_DIR, base + ".csv")
+
+    # Si ya existe uno de ese periodo, no se pisa: JulioQ2 (2).csv
+    if os.path.exists(ruta_csv):
+        n = 2
+        while os.path.exists(os.path.join(BASE_DIR, f"{base} ({n}).csv")):
+            n += 1
+        ruta_csv = os.path.join(BASE_DIR, f"{base} ({n}).csv")
 
     cab = [
         "ID ruta", "ID usuario", "Nombre", "Placa", "Concepto", "Tipo",
@@ -428,18 +452,14 @@ def guardar(filas, id_pref):
             f.get("cantidad", ""), f.get("costo", ""), f.get("total", ""),
         ]
 
-    with io.open(ruta_txt, "w", encoding="utf-8-sig", newline="") as f:
-        f.write("\t".join(cab) + "\n")
-        for fila in filas:
-            f.write("\t".join(campos(fila)) + "\n")
-
+    # utf-8-sig = UTF-8 con BOM, para que Excel respete los acentos
     with io.open(ruta_csv, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
         w.writerow(cab)
         for fila in filas:
             w.writerow(campos(fila))
 
-    return ruta_txt, ruta_csv
+    return ruta_csv
 
 
 def main():
@@ -527,7 +547,7 @@ def main():
                 # Sin padron, al menos el nombre del reporte
                 f["nombre"] = info["nombre"]
 
-        txt, csvf = guardar(filas, id_pref)
+        ruta_csv = guardar(filas, id_pref, periodo)
 
         con_curp = sum(1 for f in filas if f.get("curp"))
         print()
@@ -542,8 +562,7 @@ def main():
         if sin_mapa:
             print(f"    Ruta no encontrada  {sin_mapa}  en el reporte del periodo")
         print()
-        print(f"  TXT: {txt}")
-        print(f"  CSV: {csvf}")
+        print(f"  CSV: {ruta_csv}")
         print("=" * 70)
 
     except Exception as e:

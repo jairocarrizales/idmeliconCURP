@@ -203,8 +203,8 @@ class Trabajador(QObject):
                 f["nombre"] = info["nombre"]
                 con_id += 1
 
-            rutas = nucleo.guardar(filas, id_pref)
-            self.log(f"Guardado: {os.path.basename(rutas[0])}")
+            ruta_csv = nucleo.guardar(filas, id_pref, periodo)
+            self.log(f"Guardado: {os.path.basename(ruta_csv)}")
 
             resumen = {
                 "filas": len(filas), "con_id": con_id,
@@ -215,7 +215,7 @@ class Trabajador(QObject):
                 "periodo": periodo, "desde": desde, "hasta": hasta,
                 "rutas_mapa": len(mapa),
             }
-            self.puente.terminado.emit("listo", (resumen, rutas))
+            self.puente.terminado.emit("listo", (resumen, ruta_csv))
 
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
@@ -285,7 +285,7 @@ class Ventana(QMainWindow):
         self.setWindowTitle("Prefacturas con ID - Mercado Libre")
         self.resize(620, 470)
         self.setMinimumSize(540, 420)
-        self.rutas = None
+        self.archivo = None        # el CSV generado
         self._armar()
         self._hilo()
 
@@ -558,7 +558,7 @@ class Ventana(QMainWindow):
         self.ordenes.extraer.emit(id_pref)
 
     def al_carpeta(self):
-        destino = os.path.dirname(self.rutas[0]) if self.rutas else _carpeta_base()
+        destino = os.path.dirname(self.archivo) if self.archivo else _carpeta_base()
         QDesktopServices.openUrl(QUrl.fromLocalFile(destino))
 
     def al_terminar(self, etapa, datos):
@@ -579,8 +579,8 @@ class Ventana(QMainWindow):
             self.pie.setText("Listo para extraer")
 
         elif etapa == "listado" or etapa == "listo":
-            resumen, rutas = datos
-            self.rutas = rutas
+            resumen, archivo = datos
+            self.archivo = archivo
             self.t_lineas.poner(resumen["filas"])
             self.t_id.poner(resumen["con_id"])
             self.t_curp.poner(resumen["con_curp"])
@@ -591,7 +591,7 @@ class Ventana(QMainWindow):
             self.b_carpeta.setEnabled(True)
             self.b_carpeta.setProperty("listo", True)
             self.pie.setText(f"{resumen['filas']} lineas guardadas")
-            self._avisar(resumen, rutas)
+            self._avisar(resumen, archivo)
 
     def al_fallar(self, mensaje):
         self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
@@ -609,7 +609,7 @@ class Ventana(QMainWindow):
         aviso.exec()
         self.pie.setText("Ocurrio un error, revisa el registro")
 
-    def _avisar(self, r, rutas):
+    def _avisar(self, r, archivo):
         detalle = [
             f"Periodo {r['periodo']}  ({r['desde']} a {r['hasta']})",
             f"{r['con_id']} lineas con ID de usuario",
@@ -626,16 +626,14 @@ class Ventana(QMainWindow):
         caja.setWindowTitle("Extraccion completa")
         caja.setIcon(QMessageBox.Information)
         caja.setText(f"Se extrajeron {r['filas']} lineas.\n\n" + "\n".join(detalle))
-        caja.setInformativeText(
-            f"{os.path.basename(rutas[0])}\n{os.path.basename(rutas[1])}"
-        )
+        caja.setInformativeText(os.path.basename(archivo))
         abrir = caja.addButton("Abrir carpeta", QMessageBox.AcceptRole)
         caja.addButton("Cerrar", QMessageBox.RejectRole)
         caja.show()
         barra_titulo_oscura(caja)
         caja.exec()
         if caja.clickedButton() is abrir:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(rutas[0])))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(archivo)))
 
     def closeEvent(self, evento):
         self.ordenes.cerrar.emit()

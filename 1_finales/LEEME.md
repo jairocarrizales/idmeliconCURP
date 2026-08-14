@@ -53,7 +53,8 @@ prefactura (ruta 147326006)
 ID usuario 4965727
 ```
 
-Salida: `billing_<prefactura>_<sello>.txt` y `.csv`
+Salida: **`JulioQ2.csv`** — el nombre es el período, sin el año. Si ya
+existe uno igual no lo pisa: escribe `JulioQ2 (2).csv`.
 
 ```
 ID ruta | ID usuario | Nombre | Placa | Concepto | Tipo |
