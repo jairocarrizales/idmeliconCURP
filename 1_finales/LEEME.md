@@ -121,18 +121,18 @@ Ventana con dos calendarios. Viene puesto en **ayer**, y hay atajos para
 Desde [ 16/08/2026 📅]  Hasta [ 16/08/2026 📅]  [Ayer] [7 días] [15 días]
 ```
 
+Los calendarios abren al hacer clic en cualquier parte del campo, y en su
+barra se elige mes y año.
+
 Salida: `rutas_<desde>_a_<hasta>_<sello>.txt` y `.csv`
 
 ```
 FECHA | CEDIS_MELI | ID_USUARIO | DRIVER | Vehiculo | Placas |
-Tipo_de_servicio | ZONA_DE_RUTA | CODIGO_POSTAL | RUTA | ID_Ruta |
-SPR | ENTREGADOS | FALLIDOS | KM | NO_VISITADOS | PROD_HORA | PERFORMANCE
+Tipo_de_servicio | ZONA_DE_RUTA | RUTA | ID_Ruta | SPR | ENTREGADOS |
+FALLIDOS | KM | NO_VISITADOS | PROD_HORA | PERFORMANCE
 ```
 
-`PERFORMANCE` sale como **`96,84%`**, listo para leer.
-
-**`CODIGO_POSTAL` queda vacía**: no existe en ninguna fuente de MELI y hay
-que capturarla aparte.
+**17 columnas, todas con dato.** `PERFORMANCE` sale como `96,84%`.
 
 ### Las rutas de Service Partner no llevan nombre
 

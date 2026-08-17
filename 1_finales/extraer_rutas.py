@@ -49,13 +49,13 @@ PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
 # fuente de MELI y solo estorbaban vacias.
 COLUMNAS = [
     "FECHA", "CEDIS_MELI", "ID_USUARIO", "DRIVER", "Vehiculo", "Placas",
-    "Tipo_de_servicio", "ZONA_DE_RUTA", "CODIGO_POSTAL", "RUTA", "ID_Ruta",
+    "Tipo_de_servicio", "ZONA_DE_RUTA", "RUTA", "ID_Ruta",
     "SPR", "ENTREGADOS", "FALLIDOS", "KM", "NO_VISITADOS", "PROD_HORA",
     "PERFORMANCE",
 ]
 
-# La unica que queda sin fuente; se reporta al final para tenerla presente
-SIN_FUENTE = ("CODIGO_POSTAL",)
+# Ya no queda ninguna sin dato: todas las columnas se llenan
+SIN_FUENTE = ()
 
 # El nombre de la ruta (C1_AM1) no viene por API: la ficha llega del
 # servidor con el ya puesto. Se lee del HTML, que tarda 0.7 s por ruta.
@@ -347,7 +347,6 @@ def bajar_reporte(driver, desde, hasta):
             "Tipo_de_servicio": celda(f, "servicio"),
             # El municipio visitado es lo que el control llama zona de ruta
             "ZONA_DE_RUTA": celda(f, "municipio"),
-            "CODIGO_POSTAL": "",         # no viene de MELI
             "RUTA": "",                  # se llena leyendo la ficha
             "ID_Ruta": ruta,
             "SPR": celda(f, "spr"),
@@ -453,7 +452,7 @@ def completar_nombres(driver, registros):
     if not total:
         return 0
 
-    log(f"Trayendo el nombre de {total} rutas en lotes de {LOTE_FICHAS}...")
+    log(f"Trayendo el nombre de {total} rutas...")
     if omitidas:
         log(f"  ({omitidas} de Service Partner no llevan nombre; se omiten)")
     if total > DESCANSO_CADA:
@@ -656,11 +655,11 @@ def main():
         print(f"    RD / SDD            {conteo['RD']}")
         if conteo["?"]:
             print(f"    Sin clasificar      {conteo['?']}")
-        print()
-        print("  Columnas que quedan VACIAS (hay que capturarlas aparte,")
-        print("  no existen en ninguna fuente de Mercado Libre):")
-        for c in SIN_FUENTE:
-            print(f"    - {c}")
+        if SIN_FUENTE:
+            print()
+            print("  Columnas que quedan VACIAS (hay que capturarlas aparte):")
+            for c in SIN_FUENTE:
+                print(f"    - {c}")
         print()
         print(f"  TXT: {txt}")
         print(f"  CSV: {csvf}")

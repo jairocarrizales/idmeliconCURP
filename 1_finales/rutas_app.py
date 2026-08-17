@@ -17,7 +17,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QPlainTextEdit, QFrame, QMessageBox, QGridLayout,
-    QSizePolicy, QDateEdit, QProgressBar,
+    QSizePolicy, QDateEdit, QProgressBar, QCalendarWidget,
 )
 
 import extraer_rutas as nucleo
@@ -267,15 +267,42 @@ class Ventana(QMainWindow):
         fila_f = QHBoxLayout()
         fila_f.setSpacing(7)
         est_eti = f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
+        # El calendario emergente: hay que darle color a cada parte, o Qt lo
+        # dibuja con el tema claro sobre el fondo oscuro y no se lee.
         est_fecha = (
             f"QDateEdit {{ background: {PANEL}; color: {TEXTO};"
-            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 0 8px;"
-            f" font-family: {FUENTE}; font-size: 11px; }}"
-            f"QDateEdit:focus {{ border: 1px solid {AZUL}; }}"
-            f"QDateEdit::drop-down {{ border: none; width: 18px; }}"
-            f"QCalendarWidget QWidget {{ background: {PANEL}; color: {TEXTO}; }}"
+            f" border: 1px solid {BORDE}; border-radius: 6px;"
+            f" padding: 0 6px 0 8px; font-family: {FUENTE};"
+            f" font-size: 12px; font-weight: 600; }}"
+            f"QDateEdit:hover {{ border: 1px solid {AZUL}; }}"
+            f"QDateEdit::drop-down {{ subcontrol-origin: padding;"
+            f" subcontrol-position: center right; width: 22px;"
+            f" border-left: 1px solid {BORDE}; }}"
+            f"QDateEdit::down-arrow {{ image: none; width: 0; height: 0;"
+            f" border-left: 4px solid transparent;"
+            f" border-right: 4px solid transparent;"
+            f" border-top: 5px solid {AMARILLO}; }}"
+            # El calendario
+            f"QCalendarWidget QWidget {{ background: {PANEL};"
+            f" color: {TEXTO}; }}"
             f"QCalendarWidget QAbstractItemView {{ background: {PANEL};"
-            f" color: {TEXTO}; selection-background-color: {AZUL}; }}"
+            f" color: {TEXTO}; selection-background-color: {AZUL};"
+            f" selection-color: white; outline: none; }}"
+            # La barra de arriba, con mes y año
+            f"QCalendarWidget QWidget#qt_calendar_navigationbar {{"
+            f" background: {BORDE}; }}"
+            f"QCalendarWidget QToolButton {{ background: transparent;"
+            f" color: {TEXTO}; font-family: {FUENTE}; font-size: 12px;"
+            f" font-weight: 700; padding: 4px 8px; border-radius: 4px; }}"
+            f"QCalendarWidget QToolButton:hover {{ background: {AZUL}; }}"
+            f"QCalendarWidget QToolButton::menu-indicator {{ image: none; }}"
+            # Los desplegables de mes y año
+            f"QCalendarWidget QMenu {{ background: {PANEL}; color: {TEXTO}; }}"
+            f"QCalendarWidget QMenu::item:selected {{ background: {AZUL}; }}"
+            f"QCalendarWidget QSpinBox {{ background: {PANEL}; color: {TEXTO};"
+            f" selection-background-color: {AZUL}; }}"
+            # Los dias de otro mes, apagados
+            f"QCalendarWidget QAbstractItemView:disabled {{ color: {SUAVE}; }}"
         )
 
         # Por defecto, ayer: es lo que casi siempre se quiere
@@ -283,19 +310,11 @@ class Ventana(QMainWindow):
 
         eti_d = QLabel("Desde")
         eti_d.setStyleSheet(est_eti)
-        self.f_desde = QDateEdit(ayer)
-        self.f_desde.setCalendarPopup(True)
-        self.f_desde.setDisplayFormat("dd/MM/yyyy")
-        self.f_desde.setFixedHeight(28)
-        self.f_desde.setStyleSheet(est_fecha)
+        self.f_desde = self._fecha(ayer, est_fecha)
 
         eti_h = QLabel("Hasta")
         eti_h.setStyleSheet(est_eti)
-        self.f_hasta = QDateEdit(ayer)
-        self.f_hasta.setCalendarPopup(True)
-        self.f_hasta.setDisplayFormat("dd/MM/yyyy")
-        self.f_hasta.setFixedHeight(28)
-        self.f_hasta.setStyleSheet(est_fecha)
+        self.f_hasta = self._fecha(ayer, est_fecha)
 
         # Atajos para los rangos que se piden a diario
         self.b_ayer = self._chico("Ayer")
@@ -367,6 +386,49 @@ class Ventana(QMainWindow):
         self.pie.setStyleSheet(
             f"color: {SUAVE}; font-family: {FUENTE}; font-size: 10px;")
         raiz.addWidget(self.pie)
+
+    def _fecha(self, valor, estilo):
+        """Un campo de fecha cuyo calendario abre al hacer clic encima.
+
+        Por defecto QDateEdit solo abre el calendario con la flechita, y hay
+        que atinarle. Aqui abre al pinchar en cualquier parte del campo.
+        """
+        campo = QDateEdit(valor)
+        campo.setCalendarPopup(True)
+        campo.setDisplayFormat("dd/MM/yyyy")
+        campo.setFixedHeight(30)
+        campo.setMinimumWidth(120)
+        campo.setStyleSheet(estilo)
+        campo.setCursor(Qt.PointingHandCursor)
+        campo.setToolTip("Clic para elegir la fecha en el calendario")
+
+        # El calendario, con mes y año elegibles desde su barra
+        cal = campo.calendarWidget()
+        if cal:
+            cal.setGridVisible(False)
+            cal.setNavigationBarVisible(True)
+            cal.setFirstDayOfWeek(Qt.Monday)
+            # Sin la columna de numero de semana, que estorba
+            try:
+                cal.setVerticalHeaderFormat(
+                    QCalendarWidget.NoVerticalHeader)
+            except Exception:
+                pass
+
+        # Abrir al hacer clic en cualquier parte, no solo en la flecha
+        original = campo.mousePressEvent
+
+        def al_pinchar(evento, c=campo, o=original):
+            o(evento)
+            if evento.button() == Qt.LeftButton:
+                # Qt no expone el popup directamente: se dispara con F4
+                from PySide6.QtGui import QKeyEvent
+                from PySide6.QtCore import QEvent
+                tecla = QKeyEvent(QEvent.KeyPress, Qt.Key_F4, Qt.NoModifier)
+                QApplication.sendEvent(c, tecla)
+
+        campo.mousePressEvent = al_pinchar
+        return campo
 
     def _rango(self, dias, hasta_hace):
         """Pone un rango que termina ayer y abarca 'dias' hacia atras."""
