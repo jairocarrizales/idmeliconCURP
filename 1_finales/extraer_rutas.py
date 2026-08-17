@@ -63,10 +63,11 @@ FICHA = ("https://envios.adminml.com/logistics/monitoring-distribution"
          "/detail/{ruta}?site=MLM")
 LOTE_FICHAS = 12          # medido: 168 rutas en ~12 segundos
 PAUSA_FICHAS = 0.2
-# Chrome se cae en los trabajos largos: en una corrida de 2366 rutas murio
-# a las 1260. Un descanso cada tantas fichas lo evita.
-DESCANSO_CADA = 300
-DESCANSO_SEG = 5
+# Chrome muere de 'Out of Memory' en los trabajos largos: dos corridas
+# reales cayeron a las ~1270 rutas. Cada 250 fichas se recarga la pagina,
+# que es lo unico que le hace soltar la memoria acumulada.
+DESCANSO_CADA = 250
+DESCANSO_SEG = 3
 # Si varios lotes seguidos fallan, algo va mal: cortar en vez de insistir
 MAX_FALLOS_SEGUIDOS = 4
 # Cuanto esperar por un lote. Con 120 s, siete lotes fallidos eran 14
@@ -488,19 +489,36 @@ def nombre_del_html(html):
 
 
 def pedir_lote_fichas(driver, ids):
-    """Trae el HTML de varias fichas a la vez y devuelve {id: nombre}.
+    """Trae los nombres de varias fichas a la vez: {id: nombre}.
 
-    El tiempo lo domina la latencia (0.7 s por ficha), asi que pedirlas en
-    paralelo es donde esta la ganancia: 168 rutas en ~12 s.
+    IMPORTANTE: el nombre se extrae DENTRO del navegador y solo vuelve esa
+    cadena. Antes se devolvia el HTML completo de cada ficha -unos 1.5 MB-
+    y Chrome moria de 'Out of Memory' a las ~1300 rutas. Devolviendo solo
+    el nombre, cada ficha deja 10 bytes en vez de un megabyte y medio.
     """
     script = """
     const [plantilla, ids] = arguments;
     const done = arguments[arguments.length - 1];
+
+    // Sacar el nombre aqui mismo y soltar el HTML enseguida
+    function nombreDe(t) {
+      let m = t.match(/Ruta\\s+([A-Z0-9]{1,4}_[A-Z0-9_]{2,14})/);
+      if (m) return m[1];
+      m = t.match(/"routeName"\\s*:\\s*"([A-Z0-9]{1,4}_[A-Z0-9_]{2,14})"/);
+      if (m) return m[1];
+      m = t.match(/>\\s*([A-Z]{1,4}\\d{0,3}_[A-Z0-9_]{2,14})\\s*</);
+      return m ? m[1] : '';
+    }
+
     Promise.all(ids.map(id =>
       fetch(plantilla.replace('{ruta}', id), {credentials: 'include'})
         .then(r => r.ok ? r.text() : '')
-        .then(t => ({id: id, html: t}))
-        .catch(() => ({id: id, html: ''}))
+        .then(t => {
+          const n = nombreDe(t);
+          t = null;               // que el recolector se lo lleve ya
+          return {id: id, nombre: n};
+        })
+        .catch(() => ({id: id, nombre: ''}))
     )).then(done);
     """
     driver.set_script_timeout(TIMEOUT_LOTE)
@@ -508,11 +526,8 @@ def pedir_lote_fichas(driver, ids):
 
     salida = {}
     for r in respuestas or []:
-        if not r or not r.get("html"):
-            continue
-        nombre = nombre_del_html(r["html"])
-        if nombre:
-            salida[str(r["id"])] = nombre
+        if r and r.get("nombre"):
+            salida[str(r["id"])] = r["nombre"]
     return salida
 
 
@@ -522,6 +537,29 @@ def _chrome_vivo(driver):
         _ = driver.current_url
         return True
     except Exception:
+        return False
+
+
+def _liberar_memoria(driver):
+    """Recarga la pagina para que Chrome suelte lo acumulado.
+
+    Miles de fetch dejan basura que el recolector no alcanza a limpiar
+    solo. Navegar a una pagina en blanco y volver descarta ese contexto
+    entero: es lo unico que evita el 'Out of Memory' en trabajos largos.
+    """
+    try:
+        actual = driver.current_url
+        driver.get("about:blank")
+        time.sleep(0.6)
+        driver.get(actual if "adminml.com" in (actual or "") else PANEL)
+        time.sleep(DESCANSO_SEG)
+        return True
+    except Exception:
+        # Si no se pudo, al menos descansar
+        try:
+            time.sleep(DESCANSO_SEG)
+        except Exception:
+            pass
         return False
 
 
@@ -576,6 +614,17 @@ def completar_nombres(driver, registros):
             fallos_seguidos += 1
             log(f"  Lote fallido: {resumir(e)}")
 
+            # 'Out of Memory' y 'frame detached' son la misma historia:
+            # Chrome se quedo sin memoria. Recargar suele revivirlo.
+            texto = str(e).lower()
+            if ("out of memory" in texto or "frame detached" in texto
+                    or "target crashed" in texto):
+                log("  Chrome se quedo sin memoria; recargando...")
+                if _liberar_memoria(driver) and _chrome_vivo(driver):
+                    log("  Recuperado, se continua.")
+                    fallos_seguidos = 0
+                    continue
+
             if not _chrome_vivo(driver):
                 log("  Chrome se cerro. Se detiene la busqueda de nombres.")
                 log(f"  Se conservan los {hechos} nombres ya obtenidos.")
@@ -602,11 +651,12 @@ def completar_nombres(driver, registros):
             log(f"  {procesados}/{total} ({ritmo:.0f}/s, "
                 f"faltan ~{faltan / 60:.0f} min)")
 
-        # Un respiro cada tantas fichas: sin esto Chrome se cae en los
-        # trabajos largos
+        # Un respiro cada tantas fichas. Ademas se recarga la pestaña: es
+        # lo unico que hace a Chrome soltar la memoria de verdad, y sin
+        # esto moria de 'Out of Memory' a las ~1300 rutas.
         if procesados % DESCANSO_CADA < LOTE_FICHAS and procesados < total:
-            log(f"  Pausa de {DESCANSO_SEG} s para que Chrome respire...")
-            time.sleep(DESCANSO_SEG)
+            log(f"  Pausa: liberando memoria de Chrome...")
+            _liberar_memoria(driver)
         else:
             time.sleep(PAUSA_FICHAS)
 
