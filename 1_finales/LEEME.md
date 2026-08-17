@@ -7,7 +7,7 @@ llevó hasta ellos.
 |---|---|---|
 | **`DriversMeli.exe`** | Padrón de conductores: ID, nombre, CURP, estatus, teléfono | ~15 s |
 | **`PrefacturasMeli.exe`** | Prefactura con el ID del conductor en cada línea | ~1 min |
-| **`ExtraerRutas.exe`** | Rutas diarias para el control, con rango de fechas | ~30 s |
+| **`RutasMeli.exe`** | Rutas diarias para el control, con calendarios | ~30 s |
 
 ## `DriversMeli.exe` — el padrón
 
@@ -112,28 +112,44 @@ de la prefactura, sin tener que decidir qué resta.
 Antes venían en positivo y la diferencia era de $168,350 según cómo se
 interpretara.
 
-## `ExtraerRutas.exe` — el control diario
+## `RutasMeli.exe` — el control diario
 
-Le das un rango de fechas (por defecto **ayer**) y genera la tabla para
-cargar al sistema.
+Ventana con dos calendarios. Viene puesto en **ayer**, y hay atajos para
+7 y 15 días.
+
+```
+Desde [ 16/08/2026 📅]  Hasta [ 16/08/2026 📅]  [Ayer] [7 días] [15 días]
+```
 
 Salida: `rutas_<desde>_a_<hasta>_<sello>.txt` y `.csv`
 
 ```
 FECHA | CEDIS_MELI | ID_USUARIO | DRIVER | Vehiculo | Placas |
-TIPO_DE_VEHICULO | Tipo_de_servicio | Tipo_de_ruta | ZONA_DE_RUTA |
-CODIGO_POSTAL | RUTA | ID_Ruta | SPR | ENTREGADOS | FALLIDOS |
-KM | NO_VISITADOS | PROD_HORA | PERFORMANCE
+Tipo_de_servicio | ZONA_DE_RUTA | CODIGO_POSTAL | RUTA | ID_Ruta |
+SPR | ENTREGADOS | FALLIDOS | KM | NO_VISITADOS | PROD_HORA | PERFORMANCE
 ```
 
-**Tres columnas quedan vacías a propósito** — no existen en ninguna fuente
-de MELI y hay que capturarlas aparte:
+`PERFORMANCE` sale como **`96,84%`**, listo para leer.
 
-- `TIPO_DE_VEHICULO` (Externo/Interno): depende del proveedor
-- `Tipo_de_ruta` (Local/Foránea)
-- `CODIGO_POSTAL`
+**`CODIGO_POSTAL` queda vacía**: no existe en ninguna fuente de MELI y hay
+que capturarla aparte.
 
-El programa las lista al terminar para tenerlas presentes.
+### Las rutas de Service Partner no llevan nombre
+
+Comprobado con datos reales: de 48 Service Partner, **ninguna** trae
+nombre de ruta, mientras las RD y SDD lo traen todas. Así que el programa
+no consulta sus fichas —sería tiempo perdido— ni las cuenta como
+faltantes:
+
+```
+Con nombre de ruta  113/113
+  (48 de Service Partner no llevan nombre)
+```
+
+Si el número real no cuadra, entonces sí avisa y sugiere un rango más
+corto.
+
+`ExtraerRutas.exe` es la misma extracción en consola, por si la prefieres.
 
 Dos cosas que sí deduce: el `Tipo_de_servicio` sale del vehículo (Media
 Milla SP → Service Partner; MLP → RD; con sufijo SDD → SDD), y el nombre

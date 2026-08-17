@@ -45,18 +45,17 @@ else:
 PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
 
 # Las columnas del control, en su orden.
-# TIPO_DE_VEHICULO, Tipo_de_ruta y CODIGO_POSTAL se dejan VACIAS a
-# proposito: no existen en ninguna fuente de MELI, y verlas en blanco
-# recuerda que hay que capturarlas aparte.
+# Se quitaron TIPO_DE_VEHICULO y Tipo_de_ruta: no existen en ninguna
+# fuente de MELI y solo estorbaban vacias.
 COLUMNAS = [
     "FECHA", "CEDIS_MELI", "ID_USUARIO", "DRIVER", "Vehiculo", "Placas",
-    "TIPO_DE_VEHICULO", "Tipo_de_servicio", "Tipo_de_ruta", "ZONA_DE_RUTA",
-    "CODIGO_POSTAL", "RUTA", "ID_Ruta", "SPR", "ENTREGADOS", "FALLIDOS",
-    "KM", "NO_VISITADOS", "PROD_HORA", "PERFORMANCE",
+    "Tipo_de_servicio", "ZONA_DE_RUTA", "CODIGO_POSTAL", "RUTA", "ID_Ruta",
+    "SPR", "ENTREGADOS", "FALLIDOS", "KM", "NO_VISITADOS", "PROD_HORA",
+    "PERFORMANCE",
 ]
 
-# Las que no vienen de MELI: se reportan al final para tenerlas presentes
-SIN_FUENTE = ("TIPO_DE_VEHICULO", "Tipo_de_ruta", "CODIGO_POSTAL")
+# La unica que queda sin fuente; se reporta al final para tenerla presente
+SIN_FUENTE = ("CODIGO_POSTAL",)
 
 # El nombre de la ruta (C1_AM1) no viene por API: la ficha llega del
 # servidor con el ya puesto. Se lee del HTML, que tarda 0.7 s por ruta.
@@ -92,6 +91,17 @@ def numero(v):
         return float(str(v).replace(",", "").strip())
     except (ValueError, AttributeError):
         return None
+
+
+def porcentaje(fraccion):
+    """0.9684 -> '96,84%'
+
+    Con coma decimal, que es lo que espera Excel en espanol.
+    """
+    try:
+        return f"{fraccion * 100:.2f}".replace(".", ",") + "%"
+    except (TypeError, ValueError):
+        return ""
 
 
 # ------------------------------------------------------------------ Chrome
@@ -322,10 +332,10 @@ def bajar_reporte(driver, desde, hasta):
         if spr is not None and entregados is not None:
             fallidos = int(spr - entregados)
 
-        # PERFORMANCE = entregados / despachados
+        # PERFORMANCE = entregados / despachados, en porcentaje legible
         performance = ""
         if spr and entregados is not None:
-            performance = round(entregados / spr, 10)
+            performance = porcentaje(entregados / spr)
 
         registros.append({
             "FECHA": celda(f, "fecha"),
@@ -334,9 +344,7 @@ def bajar_reporte(driver, desde, hasta):
             "DRIVER": celda(f, "driver"),
             "Vehiculo": celda(f, "vehiculo"),
             "Placas": celda(f, "placa"),
-            "TIPO_DE_VEHICULO": "",      # no viene de MELI
             "Tipo_de_servicio": celda(f, "servicio"),
-            "Tipo_de_ruta": "",          # no viene de MELI
             # El municipio visitado es lo que el control llama zona de ruta
             "ZONA_DE_RUTA": celda(f, "municipio"),
             "CODIGO_POSTAL": "",         # no viene de MELI
@@ -414,6 +422,16 @@ def _chrome_vivo(driver):
         return False
 
 
+def sin_nombre_de_ruta(registro):
+    """Las rutas de Service Partner no llevan nombre.
+
+    Comprobado con datos reales: de 48 Service Partner, 0 traen nombre,
+    mientras RD y SDD lo traen al 100%. Asi que no se consultan sus fichas
+    -es tiempo perdido- ni se cuentan como faltantes.
+    """
+    return "SERVICE PARTNER" in (registro.get("Tipo_de_servicio") or "").upper()
+
+
 def completar_nombres(driver, registros):
     """Llena la columna RUTA consultando la ficha de cada una.
 
@@ -427,12 +445,17 @@ def completar_nombres(driver, registros):
       - Se corta tambien tras varios fallos seguidos, aunque Chrome
         responda: algo va mal y no vale la pena tardar media hora.
     """
-    pendientes = [r for r in registros if r.get("ID_Ruta")]
+    # Las de Service Partner no tienen nombre: no se consultan
+    pendientes = [r for r in registros
+                  if r.get("ID_Ruta") and not sin_nombre_de_ruta(r)]
+    omitidas = sum(1 for r in registros if sin_nombre_de_ruta(r))
     total = len(pendientes)
     if not total:
         return 0
 
     log(f"Trayendo el nombre de {total} rutas en lotes de {LOTE_FICHAS}...")
+    if omitidas:
+        log(f"  ({omitidas} de Service Partner no llevan nombre; se omiten)")
     if total > DESCANSO_CADA:
         log(f"  (con una pausa cada {DESCANSO_CADA}, para no agotar Chrome)")
 
@@ -617,10 +640,16 @@ def main():
         print("=" * 70)
         print(f"  LISTO. {len(registros)} rutas del {desde} al {hasta}")
         print()
+        # Las de Service Partner no llevan nombre: no cuentan como faltantes
+        esperan_nombre = [r for r in registros if not sin_nombre_de_ruta(r)]
+        sin_sp = len(registros) - len(esperan_nombre)
+
         print(f"    Con ID de usuario   {con_id}/{len(registros)}")
-        print(f"    Con nombre de ruta  {con_nombre}/{len(registros)}")
-        if con_nombre < len(registros):
-            faltan = len(registros) - con_nombre
+        print(f"    Con nombre de ruta  {con_nombre}/{len(esperan_nombre)}")
+        if sin_sp:
+            print(f"      ({sin_sp} de Service Partner no llevan nombre)")
+        faltan = len(esperan_nombre) - con_nombre
+        if faltan > 0:
             print(f"      ({faltan} sin nombre: Chrome no alcanzo a leer sus")
             print("       fichas. Vuelve a correrlo con un rango mas corto)")
         print(f"    Service Partner     {conteo['SP']}")
