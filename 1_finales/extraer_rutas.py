@@ -563,14 +563,23 @@ def _liberar_memoria(driver):
         return False
 
 
-def sin_nombre_de_ruta(registro):
-    """Las rutas de Service Partner no llevan nombre.
+# Los tipos de servicio cuyas rutas no llevan nombre. Comprobado sobre
+# 2425 rutas de media quincena:
+#     Service Partner   746 filas, 0 con nombre
+#     Assistance          9 filas, 0 con nombre
+#     RD                1252 filas, 1227 con nombre
+#     SDD                418 filas,  417 con nombre
+SERVICIOS_SIN_NOMBRE = ("SERVICE PARTNER", "ASSISTANCE")
 
-    Comprobado con datos reales: de 48 Service Partner, 0 traen nombre,
-    mientras RD y SDD lo traen al 100%. Asi que no se consultan sus fichas
-    -es tiempo perdido- ni se cuentan como faltantes.
+
+def sin_nombre_de_ruta(registro):
+    """Estos servicios no llevan nombre de ruta: no se consultan.
+
+    Consultar sus fichas seria tiempo perdido, y contarlas como faltantes
+    hacia que un archivo completo pareciera incompleto.
     """
-    return "SERVICE PARTNER" in (registro.get("Tipo_de_servicio") or "").upper()
+    servicio = (registro.get("Tipo_de_servicio") or "").upper()
+    return any(s in servicio for s in SERVICIOS_SIN_NOMBRE)
 
 
 def completar_nombres(driver, registros):
@@ -595,8 +604,6 @@ def completar_nombres(driver, registros):
         return 0
 
     log(f"Trayendo el nombre de {total} rutas...")
-    if omitidas:
-        log(f"  ({omitidas} de Service Partner no llevan nombre; se omiten)")
     if total > DESCANSO_CADA:
         log(f"  (con una pausa cada {DESCANSO_CADA}, para no agotar Chrome)")
 
@@ -696,18 +703,21 @@ def servicio_desde_vehiculo(vehiculo):
 
 
 def clasificar(registros):
-    """Marca cada ruta como SP o RD, y completa el Tipo_de_servicio.
+    """Marca cada ruta por familia y completa el Tipo_de_servicio.
 
     En el control: "Service Partner" -> SP;  "RD" o "SDD" -> RD.
+    Assistance va aparte: son rutas especiales y se reportan como tales.
     """
-    conteo = {"SP": 0, "RD": 0, "?": 0}
+    conteo = {"SP": 0, "RD": 0, "AS": 0, "?": 0}
     for r in registros:
         # Si el reporte no trajo el servicio, deducirlo del vehiculo
         if not (r.get("Tipo_de_servicio") or "").strip():
             r["Tipo_de_servicio"] = servicio_desde_vehiculo(r.get("Vehiculo"))
 
         servicio = (r.get("Tipo_de_servicio") or "").upper()
-        if "SERVICE PARTNER" in servicio or servicio == "SP":
+        if "ASSISTANCE" in servicio:
+            r["_familia"] = "AS"
+        elif "SERVICE PARTNER" in servicio or servicio == "SP":
             r["_familia"] = "SP"
         elif "SDD" in servicio or servicio == "RD":
             r["_familia"] = "RD"
@@ -797,14 +807,20 @@ def main():
         esperan_nombre = [r for r in registros if not sin_nombre_de_ruta(r)]
         sin_sp = len(registros) - len(esperan_nombre)
 
+        n_as = sum(1 for r in registros
+                   if "ASSISTANCE" in (r.get("Tipo_de_servicio") or "").upper())
+
         print(f"    Con ID de usuario   {con_id}/{len(registros)}")
         print(f"    Con nombre de ruta  {con_nombre}/{len(esperan_nombre)}")
-        if sin_sp:
-            print(f"      ({sin_sp} de Service Partner no llevan nombre)")
+        if n_as:
+            print(f"      ({n_as} rutas de Assistance, especiales)")
         faltan = len(esperan_nombre) - con_nombre
         if faltan > 0:
-            print(f"      ({faltan} sin nombre: Chrome no alcanzo a leer sus")
-            print("       fichas. Vuelve a correrlo con un rango mas corto)")
+            if faltan <= max(30, len(esperan_nombre) // 40):
+                print(f"      ({faltan} rutas no tienen nombre en el portal)")
+            else:
+                print(f"      ({faltan} sin nombre: Chrome no alcanzo a leer")
+                print("       sus fichas. Prueba un rango mas corto)")
         print(f"    Service Partner     {conteo['SP']}")
         print(f"    RD / SDD            {conteo['RD']}")
         if conteo["?"]:

@@ -200,6 +200,7 @@ class Trabajador(QObject):
                 "con_nombre": sum(1 for r in registros if r.get("RUTA")),
                 "esperan_nombre": len(esperan),
                 "sp": conteo["SP"], "rd": conteo["RD"],
+                "asistencia": conteo.get("AS", 0),
                 "desde": desde, "hasta": hasta,
             }
             self.puente.terminado.emit("listo", (resumen, rutas[1]))
@@ -394,7 +395,9 @@ class Ventana(QMainWindow):
         self.t_rutas = Tarjeta("Rutas", TEXTO)
         self.t_sp = Tarjeta("Service Partner", AZUL)
         self.t_rd = Tarjeta("RD / SDD", VERDE)
-        for i, t in enumerate((self.t_rutas, self.t_sp, self.t_rd)):
+        self.t_as = Tarjeta("Assistance", AMARILLO)
+        for i, t in enumerate((self.t_rutas, self.t_sp, self.t_rd,
+                               self.t_as)):
             rejilla.addWidget(t, 0, i)
         raiz.addLayout(rejilla)
 
@@ -630,6 +633,7 @@ class Ventana(QMainWindow):
             self.t_rutas.poner(r["filas"])
             self.t_sp.poner(r["sp"])
             self.t_rd.poner(r["rd"])
+            self.t_as.poner(r.get("asistencia", 0))
             self.barra.hide()
 
             self.paso.setText("Listo  ·  El archivo ya esta guardado")
@@ -684,13 +688,18 @@ class Ventana(QMainWindow):
             f"{r['con_id']} con ID de usuario",
             f"{r['con_nombre']} de {r['esperan_nombre']} con nombre de ruta",
         ]
-        sp_sin = r["filas"] - r["esperan_nombre"]
-        if sp_sin:
-            detalle.append(f"({sp_sin} de Service Partner no llevan nombre)")
+        n_as = r.get("asistencia", 0)
+        if n_as:
+            detalle.append(f"{n_as} rutas de Assistance (especiales)")
         faltan = r["esperan_nombre"] - r["con_nombre"]
         if faltan > 0:
-            detalle.append(f"Faltaron {faltan} nombres: prueba un rango "
-                           "mas corto")
+            # Unas pocas son normales: rutas que MELI no llego a nombrar
+            if faltan <= max(30, r["esperan_nombre"] // 40):
+                detalle.append(f"{faltan} rutas no tienen nombre en el "
+                               "portal (normal)")
+            else:
+                detalle.append(f"Faltaron {faltan} nombres: prueba un rango "
+                               "mas corto")
 
         caja = QMessageBox(self)
         caja.setWindowTitle("Extraccion completa")
