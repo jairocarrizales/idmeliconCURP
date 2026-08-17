@@ -29,7 +29,7 @@ import json
 import time
 import base64
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta   # timedelta: para buscar dias atras
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -268,6 +268,110 @@ def indice_de(cab, *nombres):
 
 
 # --------------------------------------------------------------- extraer
+def hay_datos(driver, dia):
+    """Un dia suelto: cuantas rutas tiene? -1 si ni siquiera responde.
+
+    Se usa para avisar antes de extraer, en vez de fallar a la mitad.
+    """
+    url = (f"{API_REPORTE}?mile=LM&init_date={dia}"
+           f"&end_date={dia}&report_type=carrier")
+    try:
+        r = llamar(driver, url, binario=True)
+    except Exception:
+        return -1
+    if r.get("status") != 200 or not r.get("b64"):
+        return -1
+    try:
+        cab, filas = leer_xlsx(base64.b64decode(r["b64"]))
+        return len(filas) if cab else 0
+    except Exception:
+        return -1
+
+
+def ultimo_dia_con_datos(driver, desde_hoy=None, tope=400, log=log):
+    """Busca hacia atras el dia mas viejo que todavia tiene datos.
+
+    Va por busqueda binaria para no pedir cientos de dias: primero
+    encuentra un dia sin datos, y luego afina entre ese y el ultimo bueno.
+    Suele resolverse en unas 10 consultas.
+
+    Devuelve (mas_viejo_con_datos, mas_reciente_sin_datos) en aaaa-mm-dd.
+    """
+    hoy = (datetime.strptime(desde_hoy, "%Y-%m-%d").date()
+           if desde_hoy else datetime.now().date())
+
+    def dia(atras):
+        return (hoy - timedelta(days=atras)).strftime("%Y-%m-%d")
+
+    # 1) Un punto de partida con datos
+    bueno = None
+    for d in (1, 2, 3, 7):
+        n = hay_datos(driver, dia(d))
+        log(f"  {dia(d)}: {n if n >= 0 else 'no responde'} rutas")
+        if n > 0:
+            bueno = d
+            break
+    if bueno is None:
+        return "", ""
+
+    # 2) Duplicar hasta encontrar uno sin datos
+    malo = None
+    d = bueno * 2
+    while d <= tope:
+        n = hay_datos(driver, dia(d))
+        log(f"  {dia(d)} ({d}d atras): "
+            f"{n if n > 0 else 'sin datos'}")
+        if n > 0:
+            bueno = d
+            d *= 2
+        else:
+            malo = d
+            break
+    if malo is None:
+        # Hay datos hasta el tope: no encontramos el limite
+        return dia(bueno), ""
+
+    # 3) Afinar entre el ultimo bueno y el primero malo
+    while malo - bueno > 1:
+        medio = (bueno + malo) // 2
+        n = hay_datos(driver, dia(medio))
+        log(f"  {dia(medio)} ({medio}d atras): "
+            f"{n if n > 0 else 'sin datos'}")
+        if n > 0:
+            bueno = medio
+        else:
+            malo = medio
+
+    return dia(bueno), dia(malo)
+
+
+def revisar_rango(driver, desde, hasta, log=log):
+    """Comprueba que el rango tenga datos ANTES de extraer.
+
+    Devuelve (hay, aviso). Si 'hay' es False, no vale la pena seguir.
+    """
+    n_desde = hay_datos(driver, desde)
+    if n_desde > 0:
+        return True, ""
+
+    log(f"  El {desde} no tiene datos; buscando hasta donde llega...")
+    n_hasta = hay_datos(driver, hasta)
+
+    if n_hasta > 0:
+        # El final si tiene: el rango esta a medias
+        return True, (
+            f"El {desde} no tiene datos, pero el {hasta} si.\n\n"
+            "El reporte saldra incompleto: le faltaran los primeros dias."
+        )
+
+    return False, (
+        f"Ni el {desde} ni el {hasta} tienen datos.\n\n"
+        "Mercado Libre no guarda el reporte de operacion indefinidamente. "
+        "Presiona 'Hasta cuando hay datos' para saber desde que fecha "
+        "puedes extraer."
+    )
+
+
 def bajar_reporte(driver, desde, hasta):
     """Reporte de operacion: una fila por ruta, con id del transportista."""
     url = (f"{API_REPORTE}?mile=LM&init_date={desde}"

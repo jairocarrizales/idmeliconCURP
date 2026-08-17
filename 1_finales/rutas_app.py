@@ -79,6 +79,7 @@ class Ordenes(QObject):
 
     abrir = Signal()
     extraer = Signal(str, str)
+    historial = Signal()
     cerrar = Signal()
 
 
@@ -112,6 +113,24 @@ class Trabajador(QObject):
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
 
+    @Slot()
+    def revisar_historial(self):
+        """Busca desde que fecha MELI todavia tiene datos."""
+        try:
+            if not self.driver:
+                self.puente.fallo.emit("Primero hay que abrir Chrome.")
+                return
+            if "adminml.com" not in (self.driver.current_url or ""):
+                self.driver.get(nucleo.PANEL)
+                time.sleep(3)
+
+            self.log("Buscando hasta donde llega el historial...")
+            viejo, sin_datos = nucleo.ultimo_dia_con_datos(
+                self.driver, log=self.log)
+            self.puente.terminado.emit("historial", (viejo, sin_datos))
+        except Exception as e:
+            self.puente.fallo.emit(self._explicar(e))
+
     @Slot(str, str)
     def extraer(self, desde, hasta):
         try:
@@ -123,6 +142,16 @@ class Trabajador(QObject):
                 self.log("Volviendo al panel...")
                 self.driver.get(nucleo.PANEL)
                 time.sleep(3)
+
+            # Comprobar que haya datos antes de gastar minutos extrayendo
+            self.log("Comprobando que el rango tenga datos...")
+            hay, aviso = nucleo.revisar_rango(
+                self.driver, desde, hasta, log=self.log)
+            if not hay:
+                self.puente.fallo.emit("SINDATOS:" + aviso)
+                return
+            if aviso:
+                self.log(f"AVISO: {aviso.splitlines()[0]}")
 
             registros = nucleo.bajar_reporte(self.driver, desde, hasta)
             if not registros:
@@ -333,6 +362,14 @@ class Ventana(QMainWindow):
         fila_f.addWidget(self.b_quincena)
         raiz.addLayout(fila_f)
 
+        # MELI no guarda el reporte indefinidamente: este boton dice
+        # desde que fecha todavia se puede extraer
+        self.b_historial = self._chico(
+            "Hasta cuando hay datos en Mercado Libre")
+        self.b_historial.clicked.connect(self.al_revisar_historial)
+        self.b_historial.setEnabled(False)
+        raiz.addWidget(self.b_historial)
+
         # --- botones ---
         fila = QHBoxLayout()
         fila.setSpacing(7)
@@ -470,6 +507,7 @@ class Ventana(QMainWindow):
 
         self.ordenes.abrir.connect(self.trabajador.abrir_navegador)
         self.ordenes.extraer.connect(self.trabajador.extraer)
+        self.ordenes.historial.connect(self.trabajador.revisar_historial)
         self.ordenes.cerrar.connect(self.trabajador.cerrar)
 
         self.puente.mensaje.connect(self.escribir)
@@ -526,6 +564,13 @@ class Ventana(QMainWindow):
         self.escribir(f"Extrayendo del {d} al {h}...")
         self.ordenes.extraer.emit(d, h)
 
+    def al_revisar_historial(self):
+        self.b_historial.setEnabled(False)
+        self.b_historial.setText("Buscando...")
+        self.pie.setText("Buscando hasta donde llega el historial...")
+        self.escribir("Revisando el historial disponible...")
+        self.ordenes.historial.emit()
+
     def al_carpeta(self):
         destino = os.path.dirname(self.archivo) if self.archivo else _carpeta_base()
         QDesktopServices.openUrl(QUrl.fromLocalFile(destino))
@@ -536,9 +581,48 @@ class Ventana(QMainWindow):
                 "Paso 2 de 2  ·  Elige el rango y presiona 'Extraer rutas'")
             self.b_extraer.setEnabled(True)
             self.b_extraer.setProperty("listo", True)
+            self.b_historial.setEnabled(True)
             self.b_abrir.setText("Reabrir Chrome")
             self.b_abrir.setEnabled(True)
             self.pie.setText("Listo para extraer")
+
+        elif etapa == "historial":
+            viejo, sin_datos = datos
+            self.b_historial.setEnabled(True)
+            self.b_historial.setText("Hasta cuando hay datos en Mercado Libre")
+
+            if not viejo:
+                self.escribir("No se encontraron datos en ninguna fecha.")
+                self.pie.setText("Sin datos disponibles")
+                QMessageBox.warning(
+                    self, "Sin datos",
+                    "No se encontraron rutas en ninguna fecha reciente.\n\n"
+                    "Revisa que la sesion siga activa.")
+                return
+
+            self.escribir(f"Hay datos desde el {viejo}")
+            self.pie.setText(f"Historial disponible desde el {viejo}")
+
+            texto = f"Se puede extraer desde el {viejo} en adelante."
+            if sin_datos:
+                texto += f"\n\nEl {sin_datos} ya no tiene datos."
+
+            caja = QMessageBox(self)
+            caja.setWindowTitle("Historial disponible")
+            caja.setIcon(QMessageBox.Information)
+            caja.setText(texto)
+            caja.setInformativeText(
+                "Mercado Libre no guarda el reporte de operacion "
+                "indefinidamente.")
+            usar = caja.addButton("Poner esa fecha en 'Desde'",
+                                  QMessageBox.AcceptRole)
+            caja.addButton("Cerrar", QMessageBox.RejectRole)
+            caja.show()
+            barra_titulo_oscura(caja)
+            caja.exec()
+            if caja.clickedButton() is usar:
+                self.f_desde.setDate(QDate.fromString(viejo, "yyyy-MM-dd"))
+                self.escribir(f"'Desde' puesto en {viejo}")
 
         elif etapa == "listo":
             r, archivo = datos
@@ -557,21 +641,42 @@ class Ventana(QMainWindow):
             self._avisar(r, archivo)
 
     def al_fallar(self, mensaje):
-        self.escribir(f"ERROR: {mensaje.splitlines()[0]}")
+        # SINDATOS: el rango elegido no tiene informacion, no es un error
+        sin_datos = mensaje.startswith("SINDATOS:")
+        if sin_datos:
+            mensaje = mensaje[len("SINDATOS:"):]
+
+        self.escribir(f"{'AVISO' if sin_datos else 'ERROR'}: "
+                      f"{mensaje.splitlines()[0]}")
         self.barra.hide()
         self.b_abrir.setEnabled(True)
         self.b_extraer.setText("2 · Extraer rutas")
+        self.b_historial.setEnabled(True)
+        self.b_historial.setText("Hasta cuando hay datos en Mercado Libre")
         for b in (self.b_extraer, self.b_carpeta):
             if b.property("listo") is True:
                 b.setEnabled(True)
+
         aviso = QMessageBox(self)
-        aviso.setWindowTitle("Algo salio mal")
-        aviso.setIcon(QMessageBox.Warning)
+        aviso.setWindowTitle("Ese rango no tiene datos" if sin_datos
+                             else "Algo salio mal")
+        aviso.setIcon(QMessageBox.Information if sin_datos
+                      else QMessageBox.Warning)
         aviso.setText(mensaje)
+        if sin_datos:
+            revisar = aviso.addButton("Buscar hasta cuando hay",
+                                      QMessageBox.AcceptRole)
+            aviso.addButton("Cerrar", QMessageBox.RejectRole)
         aviso.show()
         barra_titulo_oscura(aviso)
         aviso.exec()
-        self.pie.setText("Ocurrio un error, revisa el registro")
+
+        if sin_datos and aviso.clickedButton() is revisar:
+            self.al_revisar_historial()
+            return
+
+        self.pie.setText("Elige otro rango" if sin_datos
+                         else "Ocurrio un error, revisa el registro")
 
     def _avisar(self, r, archivo):
         detalle = [

@@ -124,6 +124,27 @@ Desde [ 16/08/2026 📅]  Hasta [ 16/08/2026 📅]  [Ayer] [7 días] [15 días]
 Los calendarios abren al hacer clic en cualquier parte del campo, y en su
 barra se elige mes y año.
 
+### Hasta cuándo hay datos
+
+Mercado Libre **no guarda el reporte indefinidamente**. Pedir fechas
+demasiado viejas devuelve un archivo vacío, y antes eso se descubría a
+mitad de la extracción.
+
+Ahora hay un botón que lo averigua:
+
+```
+Hasta cuando hay datos en Mercado Libre
+```
+
+Busca hacia atrás por bisección —unas 12 consultas, no cientos— y te dice
+desde qué fecha se puede extraer. Ofrece ponerla directo en *Desde*.
+
+Además, **antes de cada extracción** comprueba que el rango tenga datos:
+
+- Si no hay nada, avisa y ofrece buscar el límite, sin gastar minutos.
+- Si el rango está a medias (el final tiene datos pero el inicio no),
+  avisa que el reporte saldrá incompleto y continúa.
+
 Salida: `rutas_<desde>_a_<hasta>_<sello>.txt` y `.csv`
 
 ```
