@@ -5,24 +5,29 @@ llevó hasta ellos.
 
 | Programa | Qué hace | Tiempo |
 |---|---|---|
-| **`DriversMeli.exe`** | Padrón de conductores: ID, nombre, CURP, estatus, teléfono | ~15 s |
+| **`DriversMeli.exe`** | Padrón de conductores: ID, nombre, CURP, estatus | ~15 s |
 | **`PrefacturasMeli.exe`** | Prefactura con el ID del conductor en cada línea | ~1 min |
 | **`RutasMeli.exe`** | Rutas diarias para el control, con calendarios | ~30 s |
 
 ## `DriversMeli.exe` — el padrón
 
-Ventana con dos botones. Abre Chrome, inicias sesión, presionas **Extraer
-TODO** y baja los ~2,000 conductores.
+```
+Estatus [ Todos ▾]   ☑ Registrados entre [01/09/2026] [17/09/2026]
+```
+
+**Estatus**: Todos, Activos o Bloqueados. Se filtra en la propia API, así
+que pedir solo los bloqueados tarda menos que traerlos todos.
+
+**Fechas**: viene puesto el **mes en curso**, del día 1 a hoy. Desmarca la
+casilla para descargar el padrón completo sin filtrar.
 
 Salida: `drivers_meli_AAAAMMDD_HHMMSS.txt` y `.csv`
 
 ```
-ID | Nombre | CURP | Estatus | Telefono | E-mail | Fecha creacion
+ID | Nombre | CURP | Estatus
 ```
 
-Si respondes que sí a los teléfonos, consulta las fichas una por una
-(~2 min). El listado se guarda antes, así que una interrupción no cuesta
-lo ya bajado.
+Cuatro columnas: quién es y si está activo o bloqueado.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 
@@ -186,5 +191,5 @@ que Selenium Manager baje el chromedriver). **No hace falta Python.**
 Windows mostrará "Windows protegió tu PC" porque los ejecutables no están
 firmados: *Más información* → *Ejecutar de todas formas*.
 
-Los archivos que generan contienen **CURP, nombres y teléfonos** — datos
+Los archivos que generan contienen **CURP y nombres** — datos
 personales. Trátalos en consecuencia.

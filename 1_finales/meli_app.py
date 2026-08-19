@@ -17,7 +17,7 @@ import time
 import traceback
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QDate
 from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
@@ -35,6 +35,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QSizePolicy,
+    QComboBox,
+    QDateEdit,
+    QCheckBox,
 )
 
 import extraer_api as nucleo
@@ -73,7 +76,7 @@ class Ordenes(QObject):
     """
 
     abrir = Signal()
-    todo = Signal()
+    todo = Signal(str, str, str)   # estatus, desde, hasta
     cerrar = Signal()
 
 
@@ -118,8 +121,8 @@ class Trabajador(QObject):
         except Exception as e:
             self.puente.fallo.emit(self._explicar(e))
 
-    @Slot()
-    def descargar_todo(self):
+    @Slot(str, str, str)
+    def descargar_todo(self, estatus="todos", desde="", hasta=""):
         """Hace todo el trabajo de una sola vez: listado, fichas y guardado."""
         try:
             if not self.driver:
@@ -130,9 +133,14 @@ class Trabajador(QObject):
                 return
 
             # --- 1) Listado ---
-            self.log("Paso 1 de 3: extrayendo la lista de drivers...")
+            filtro = {"todos": "todos los drivers",
+                      "activos": "solo activos",
+                      "bloqueados": "solo bloqueados"}.get(estatus, estatus)
+            rango = f", registrados del {desde} al {hasta}" if desde else ""
+            self.log(f"Paso 1 de 2: extrayendo {filtro}{rango}...")
             inicio = time.time()
-            self.registros = nucleo.extraer_todo(self.driver)
+            self.registros = nucleo.extraer_todo(
+                self.driver, estatus, desde, hasta)
 
             if not self.registros:
                 self.puente.fallo.emit(
@@ -154,12 +162,11 @@ class Trabajador(QObject):
             except Exception:
                 pass
 
-            # --- 2) Fichas ---
-            self.log("Paso 2 de 3: trayendo telefonos y correos...")
-            self._consultar_fichas()
+            # Ya no se consultan las fichas: tomaba ~2 minutos para traer
+            # telefono y correo, que no se exportan.
 
-            # --- 3) Guardado ---
-            self.log("Paso 3 de 3: guardando archivos...")
+            # --- 2) Guardado ---
+            self.log("Paso 2 de 2: guardando archivos...")
             rutas = nucleo.guardar(self.registros)
             self.log(f"  {os.path.basename(rutas[0])}")
             self.log(f"  {os.path.basename(rutas[1])}")
@@ -356,8 +363,8 @@ class Ventana(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Extractor de Drivers - Mercado Libre")
-        self.resize(560, 400)
-        self.setMinimumSize(460, 340)
+        self.resize(660, 440)
+        self.setMinimumSize(600, 400)
         self.registros = []
         self.rutas = None
 
@@ -387,6 +394,81 @@ class Ventana(QMainWindow):
             f" font-weight: 600;"
         )
         raiz.addWidget(self.paso)
+
+        # --- filtros ---
+        est_eti = f"color: {SUAVE}; font-family: {FUENTE}; font-size: 11px;"
+        est_combo = (
+            f"QComboBox {{ background: {PANEL}; color: {TEXTO};"
+            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 0 8px;"
+            f" font-family: {FUENTE}; font-size: 11px; }}"
+            f"QComboBox:hover {{ border: 1px solid {AZUL}; }}"
+            f"QComboBox::drop-down {{ border: none; width: 18px; }}"
+            f"QComboBox QAbstractItemView {{ background: {PANEL};"
+            f" color: {TEXTO}; selection-background-color: {AZUL}; }}"
+        )
+        est_fecha = (
+            f"QDateEdit {{ background: {PANEL}; color: {TEXTO};"
+            f" border: 1px solid {BORDE}; border-radius: 6px; padding: 0 6px;"
+            f" font-family: {FUENTE}; font-size: 11px; }}"
+            f"QDateEdit:hover {{ border: 1px solid {AZUL}; }}"
+            f"QDateEdit:disabled {{ color: #5a616d; }}"
+            f"QDateEdit::drop-down {{ border: none; width: 18px; }}"
+            f"QCalendarWidget QWidget {{ background: {PANEL}; color: {TEXTO}; }}"
+            f"QCalendarWidget QAbstractItemView {{ background: {PANEL};"
+            f" color: {TEXTO}; selection-background-color: {AZUL};"
+            f" selection-color: white; outline: none; }}"
+            f"QCalendarWidget QWidget#qt_calendar_navigationbar {{"
+            f" background: {BORDE}; }}"
+            f"QCalendarWidget QToolButton {{ background: transparent;"
+            f" color: {TEXTO}; font-family: {FUENTE}; font-size: 11px;"
+            f" font-weight: 700; padding: 3px 6px; border-radius: 4px; }}"
+            f"QCalendarWidget QToolButton:hover {{ background: {AZUL}; }}"
+            f"QCalendarWidget QToolButton::menu-indicator {{ image: none; }}"
+            f"QCalendarWidget QMenu {{ background: {PANEL}; color: {TEXTO}; }}"
+            f"QCalendarWidget QSpinBox {{ background: {PANEL}; color: {TEXTO};"
+            f" selection-background-color: {AZUL}; }}"
+        )
+
+        fila_f = QHBoxLayout()
+        fila_f.setSpacing(7)
+
+        eti_est = QLabel("Estatus")
+        eti_est.setStyleSheet(est_eti)
+        self.combo_estatus = QComboBox()
+        self.combo_estatus.setFixedHeight(28)
+        self.combo_estatus.setStyleSheet(est_combo)
+        for etiqueta, clave in (("Todos", "todos"), ("Activos", "activos"),
+                                ("Bloqueados", "bloqueados")):
+            self.combo_estatus.addItem(etiqueta, clave)
+
+        # Por defecto, el mes en curso: del dia 1 a hoy
+        hoy = QDate.currentDate()
+        primero = QDate(hoy.year(), hoy.month(), 1)
+
+        self.chk_fecha = QCheckBox("Registrados entre")
+        self.chk_fecha.setChecked(True)
+        self.chk_fecha.setStyleSheet(
+            f"QCheckBox {{ color: {SUAVE}; font-family: {FUENTE};"
+            f" font-size: 11px; spacing: 5px; }}"
+            f"QCheckBox::indicator {{ width: 13px; height: 13px;"
+            f" border: 1px solid {BORDE}; border-radius: 3px;"
+            f" background: {PANEL}; }}"
+            f"QCheckBox::indicator:checked {{ background: {AZUL};"
+            f" border-color: {AZUL}; }}"
+        )
+        self.chk_fecha.setToolTip(
+            "Desmarcalo para descargar el padron completo, sin filtrar")
+        self.chk_fecha.stateChanged.connect(self._al_cambiar_fecha)
+
+        self.f_desde = self._fecha(primero, est_fecha)
+        self.f_hasta = self._fecha(hoy, est_fecha)
+
+        fila_f.addWidget(eti_est)
+        fila_f.addWidget(self.combo_estatus, 2)
+        fila_f.addWidget(self.chk_fecha)
+        fila_f.addWidget(self.f_desde, 2)
+        fila_f.addWidget(self.f_hasta, 2)
+        raiz.addLayout(fila_f)
 
         # --- botones ---
         fila = QHBoxLayout()
@@ -454,6 +536,40 @@ class Ventana(QMainWindow):
         )
         raiz.addWidget(self.pie)
 
+    def _fecha(self, valor, estilo):
+        """Campo de fecha cuyo calendario abre al pinchar en cualquier parte."""
+        campo = QDateEdit(valor)
+        campo.setCalendarPopup(True)
+        campo.setDisplayFormat("dd/MM/yyyy")
+        campo.setFixedHeight(28)
+        campo.setStyleSheet(estilo)
+        campo.setCursor(Qt.PointingHandCursor)
+
+        cal = campo.calendarWidget()
+        if cal:
+            cal.setGridVisible(False)
+            cal.setFirstDayOfWeek(Qt.Monday)
+
+        original = campo.mousePressEvent
+
+        def al_pinchar(evento, c=campo, o=original):
+            o(evento)
+            if evento.button() == Qt.LeftButton:
+                # Qt no expone el popup: se dispara con F4
+                from PySide6.QtGui import QKeyEvent
+                from PySide6.QtCore import QEvent
+                QApplication.sendEvent(
+                    c, QKeyEvent(QEvent.KeyPress, Qt.Key_F4, Qt.NoModifier))
+
+        campo.mousePressEvent = al_pinchar
+        return campo
+
+    def _al_cambiar_fecha(self):
+        """Sin la casilla marcada, se descarga el padron completo."""
+        activo = self.chk_fecha.isChecked()
+        self.f_desde.setEnabled(activo)
+        self.f_hasta.setEnabled(activo)
+
     def _boton(self, texto, color, principal=False):
         b = QPushButton(texto)
         b.setCursor(Qt.PointingHandCursor)
@@ -518,11 +634,23 @@ class Ventana(QMainWindow):
         self.ordenes.abrir.emit()
 
     def al_descargar_todo(self):
+        estatus = self.combo_estatus.currentData() or "todos"
+
+        desde = hasta = ""
+        if self.chk_fecha.isChecked():
+            d, h = self.f_desde.date(), self.f_hasta.date()
+            if d > h:
+                QMessageBox.warning(
+                    self, "Rango invalido",
+                    "La fecha inicial es posterior a la final.")
+                return
+            desde = d.toString("yyyy-MM-dd")
+            hasta = h.toString("yyyy-MM-dd")
+
         self.b_todo.setEnabled(False)
         self.b_todo.setText("Extrayendo...")
         self.pie.setText("Extrayendo. Puedes seguir usando la PC.")
-        self.escribir("Iniciando extraccion completa...")
-        self.ordenes.todo.emit()
+        self.ordenes.todo.emit(estatus, desde, hasta)
 
     def al_guardar(self):
         """Abre la carpeta donde quedaron los archivos."""

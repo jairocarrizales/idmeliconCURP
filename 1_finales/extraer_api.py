@@ -175,14 +175,25 @@ def crear_driver():
         raise
 
 
-def llamar_api(driver, cursor=None):
+# Los estatus que se pueden pedir a la API
+ESTATUS_API = {
+    "todos": "active,inactive,blocked",
+    "activos": "active",
+    "bloqueados": "blocked",
+}
+
+
+def llamar_api(driver, cursor=None, estatus="todos"):
     """Llama la API desde el propio navegador, reusando su sesion.
 
     Usamos fetch() dentro de la pagina para que Chrome adjunte las cookies
     solo; asi no hay que extraer ni manipular tokens.
+
+    El estatus se filtra en la propia API: pedir solo los bloqueados trae
+    menos datos y tarda menos que traerlos todos y descartar.
     """
     params = [
-        "status=active,inactive,blocked",
+        "status=" + ESTATUS_API.get(estatus, ESTATUS_API["todos"]),
         "paginated=true",
     ]
     if cursor:
@@ -283,16 +294,41 @@ def normalizar(item):
     }
 
 
-def extraer_todo(driver):
-    """Pagina la API por cursor hasta agotar los registros."""
+def dentro_del_rango(registro, desde, hasta):
+    """La fecha de registro cae en el rango pedido?
+
+    Las fechas del padron vienen como dd/mm/aaaa; el rango llega en
+    aaaa-mm-dd, que ordena bien como texto.
+    """
+    if not desde and not hasta:
+        return True
+    f = (registro.get("fecha") or "").strip()
+    if len(f) < 10 or f[2] != "/" or f[5] != "/":
+        return False        # sin fecha no se puede ubicar en el rango
+    iso = f"{f[6:10]}-{f[3:5]}-{f[0:2]}"
+    if desde and iso < desde:
+        return False
+    if hasta and iso > hasta:
+        return False
+    return True
+
+
+def extraer_todo(driver, estatus="todos", desde="", hasta=""):
+    """Pagina la API por cursor hasta agotar los registros.
+
+    estatus: 'todos', 'activos' o 'bloqueados'. Se filtra en la API.
+    desde/hasta: rango de fecha de registro, en aaaa-mm-dd. Vacios = todo.
+    Ese filtro se aplica aqui porque la API no lo admite como parametro.
+    """
     registros = []
     vistos = set()
     cursor = None
     pagina = 0
+    fuera_de_rango = 0
 
     while pagina < MAX_PAGINAS:
         pagina += 1
-        datos = llamar_api(driver, cursor)
+        datos = llamar_api(driver, cursor, estatus)
 
         lote = datos.get("result") or datos.get("results") or []
         if not isinstance(lote, list):
@@ -308,7 +344,12 @@ def extraer_todo(driver):
                 continue
             if clave is not None:
                 vistos.add(clave)
-            registros.append(normalizar(item))
+
+            reg = normalizar(item)
+            if not dentro_del_rango(reg, desde, hasta):
+                fuera_de_rango += 1
+                continue
+            registros.append(reg)
             nuevos += 1
 
         log(f"Pagina {pagina}: +{nuevos} (total {len(registros)})")
@@ -342,6 +383,8 @@ def extraer_todo(driver):
 
     if descartados:
         log(f"Se omitieron {descartados} registros sin ID o sin datos.")
+    if fuera_de_rango:
+        log(f"Se omitieron {fuera_de_rango} fuera del rango de fechas.")
 
     # Numerar al final (el numero se usa internamente, no se exporta)
     for i, r in enumerate(utiles, start=1):
@@ -482,15 +525,8 @@ def guardar(registros):
     ruta_txt = os.path.join(BASE_DIR, f"drivers_meli_{sello}.txt")
     ruta_csv = os.path.join(BASE_DIR, f"drivers_meli_{sello}.csv")
 
-    encabezados = [
-        "ID",
-        "Nombre",
-        "CURP",
-        "Estatus",
-        "Telefono",
-        "E-mail",
-        "Fecha creacion",
-    ]
+    # Solo lo que se usa: quien es y si esta activo o bloqueado
+    encabezados = ["ID", "Nombre", "CURP", "Estatus"]
 
     def campos(r):
         return [
@@ -498,9 +534,6 @@ def guardar(registros):
             r.get("nombre", ""),
             r.get("curp", ""),
             r.get("estatus", ""),
-            r.get("telefono", ""),
-            r.get("email", ""),
-            r.get("fecha", ""),
         ]
 
     # TXT con tabs -> se pega directo en Excel. utf-8-sig para los acentos.
