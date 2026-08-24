@@ -1,6 +1,6 @@
 # Los programas que se usan
 
-Estos tres son los definitivos. Todo lo demás en el repo es el camino que
+Estos cuatro son los definitivos. Todo lo demás en el repo es el camino que
 llevó hasta ellos.
 
 | Programa | Qué hace | Tiempo |
@@ -8,6 +8,7 @@ llevó hasta ellos.
 | **`DriversMeli.exe`** | Padrón de conductores: ID, nombre, CURP, estatus | ~15 s |
 | **`PrefacturasMeli.exe`** | Prefactura con el ID del conductor en cada línea | ~1 min |
 | **`RutasMeli.exe`** | Rutas diarias para el control, con calendarios | ~30 s |
+| **`CasosPNR.exe`** | Reclamos PNR del período: driver, paquete, monto | ~10 s |
 
 ## `DriversMeli.exe` — el padrón
 
@@ -28,6 +29,43 @@ ID | Nombre | CURP | Estatus
 ```
 
 Cuatro columnas: quién es y si está activo o bloqueado.
+
+## `CasosPNR.exe` — los reclamos
+
+Los reclamos PNR (paquetes no recibidos) de la Bandeja de soporte, que la
+web muestra de 30 en 30 y sin forma de exportar.
+
+```
+Periodo [ agosto 2026 · Q2 (16 al 31) ▾]   ☐ Con ruta y CEDIS
+```
+
+Viene puesto el **período en curso** —Q1 es del 1 al 15, Q2 del 16 al fin
+de mes—, y la lista llega hasta un año atrás.
+
+Salida: `pnr_<período>_<sello>.txt` y `.csv`
+
+```
+Driver | ID paquete | Monto | Descripcion
+```
+
+`Descripcion` es el estado del caso tal como lo muestra la pantalla:
+*Esperando comprobante*, *Anulado*, *Enviado a facturación*.
+
+Marcando **Con ruta y CEDIS** se agregan siete columnas más —número de
+caso, fecha, estado, motivo, ruta, ID de ruta y CEDIS—. No cuestan nada:
+vienen en la misma respuesta, solo que la pantalla no las enseña todas.
+
+### Los casos sin conductor
+
+Algunos reclamos llegan con el nombre en blanco: Mercado Libre todavía no
+asignó conductor. El programa los deja vacíos en vez de inventarlos, y al
+terminar dice cuántos son. Como sí traen el **número de ruta**, se pueden
+cruzar después con el reporte de rutas, igual que hace la prefactura.
+
+### Por qué son 12 vueltas
+
+La API acepta **30 casos por página y ni uno más** — con 50 responde 400.
+Así que 351 casos son 12 consultas. Aun así tarda unos 10 segundos.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 

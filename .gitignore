@@ -15,6 +15,12 @@ descargas_*.txt
 post_descarga_*.txt
 prueba_endpoints_*.txt
 
+# Casos PNR: traen nombre del conductor, paquete y monto
+pnr_*.txt
+pnr_*.csv
+red_pnr.json
+espia_salida.txt
+
 # Prefacturas y reportes de operacion: traen nombres, CURP y montos
 billing/
 billing_*.txt
