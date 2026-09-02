@@ -15,6 +15,11 @@ descargas_*.txt
 post_descarga_*.txt
 prueba_endpoints_*.txt
 
+# Capacidad: pedidos de vehiculos por estacion
+capacidad_*.txt
+capacidad_*.csv
+red_capacidad.json
+
 # Casos PNR: traen nombre del conductor, paquete y monto
 pnr_*.txt
 pnr_*.csv

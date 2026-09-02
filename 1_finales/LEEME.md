@@ -1,6 +1,6 @@
 # Los programas que se usan
 
-Estos cuatro son los definitivos. Todo lo demás en el repo es el camino que
+Estos cinco son los definitivos. Todo lo demás en el repo es el camino que
 llevó hasta ellos.
 
 | Programa | Qué hace | Tiempo |
@@ -9,6 +9,7 @@ llevó hasta ellos.
 | **`PrefacturasMeli.exe`** | Prefactura con el ID del conductor en cada línea | ~1 min |
 | **`RutasMeli.exe`** | Rutas diarias para el control, con calendarios | ~30 s |
 | **`CasosPNR.exe`** | Reclamos PNR del período: driver, paquete, monto | ~10 s |
+| **`CapacidadMeli.exe`** | Pedidos de vehículos por estación y tipo | ~1 s/día |
 
 ## `DriversMeli.exe` — el padrón
 
@@ -66,6 +67,73 @@ cruzar después con el reporte de rutas, igual que hace la prefactura.
 
 La API acepta **30 casos por página y ni uno más** — con 50 responde 400.
 Así que 351 casos son 12 consultas. Aun así tarda unos 10 segundos.
+
+## `CapacidadMeli.exe` — los pedidos de vehículos
+
+Lo que Mercado Libre pide cada día: cuántos vehículos, de qué tipo, en qué
+estación, y qué se hizo con cada pedido.
+
+```
+Desde [ 01/09/2026 📅]  Hasta [ 01/09/2026 📅]  [Ayer] [7] [15] [30 días]
+```
+
+Viene puesto en **ayer**. La pantalla del panel agrupa por estación y hay
+que desplegar cada grupo a mano; aquí sale todo de una vez.
+
+Salida: **dos archivos**.
+
+El detalle, una fila por vehículo pedido:
+
+```
+Fecha | Estacion | Nombre estacion | Tipo de vehiculo | Estado | Flota |
+SDD | Ciclo | ETA | ETD | ID pedido | ID viaje | Creado
+```
+
+Y el resumen, una fila por estación y tipo con los estados en columnas:
+
+```
+Fecha | Estacion | Nombre estacion | Tipo de vehiculo | Flota | Total |
+Para responder | Aceptado | Expirado | Rechazado | Cancelado por MELI
+```
+
+Ese segundo es el que sirve para planear: de un vistazo se ve que EQR2
+pidió 50 Small Van y se aceptaron las 50.
+
+### Sobre las fechas
+
+El día del panel va de **06:00 Z a 06:00 Z**, que es la medianoche en
+Ciudad de México. El programa usa esa misma hora de corte, así que un
+rango de varios días no se corre ni pierde pedidos del borde.
+
+Los días se consultan **uno por uno** —la API los devuelve así aunque le
+pidas un rango—, a razón de medio segundo cada uno. Cinco días tardan
+unos 3 segundos; un mes, unos 15. Si un día no tiene pedidos, lo dice y
+sigue con los demás.
+
+### Hasta cuándo hay historial
+
+Mercado Libre no guarda esto para siempre. El botón **Hasta cuando hay
+datos** lo averigua por bisección —9 consultas, no cientos— y ofrece
+poner esa fecha en *Desde*. Medido el 2 de septiembre de 2026, el límite
+estaba en el **5 de junio**: 88 días.
+
+Si pides un rango completamente vacío, lo busca solo y te lo dice.
+
+### Dos datos que a veces vienen en blanco
+
+**El ciclo** (AM1, SD2…) lo traen algo más de la mitad de los pedidos: no
+todos los viajes lo llevan. El programa dice cuántos son al terminar,
+para que no se lea como dato perdido.
+
+**El nombre largo de la estación** existe para todas menos `SQR2`, cuya
+descripción en el panel es su propio código.
+
+### Un detalle del panel
+
+Las tarjetas de arriba muestran un total de 158 cuando en realidad hay
+162 pedidos. No es un error de extracción: **el total de MELI se olvida
+de los expirados**. Cada estado por separado sí cuadra exacto, y el
+programa cuenta los 162.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 
