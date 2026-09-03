@@ -80,7 +80,7 @@ Desde [ 01/09/2026 📅]  Hasta [ 01/09/2026 📅]  [Ayer] [7] [15] [30 días]
 Viene puesto en **ayer**. La pantalla del panel agrupa por estación y hay
 que desplegar cada grupo a mano; aquí sale todo de una vez.
 
-Salida: **dos archivos**.
+Salida: **dos CSV** (este no genera TXT; el CSV se abre igual en Excel).
 
 El detalle, una fila por vehículo pedido:
 

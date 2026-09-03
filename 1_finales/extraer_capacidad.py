@@ -338,13 +338,9 @@ COLUMNAS = [
 ]
 
 
-def _escribir(ruta_txt, ruta_csv, encabezados, filas):
-    """El mismo contenido en TXT (para pegar en Excel) y CSV."""
+def _escribir(ruta_csv, encabezados, filas):
+    """Solo CSV: el TXT no se usa y duplicaba cada archivo."""
     # utf-8-sig: sin el BOM, Excel rompe los acentos
-    with open(ruta_txt, "w", encoding="utf-8-sig", newline="") as f:
-        f.write("\t".join(encabezados) + "\n")
-        for fila in filas:
-            f.write("\t".join(limpiar(c) for c in fila) + "\n")
     with open(ruta_csv, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(encabezados)
@@ -360,7 +356,7 @@ def guardar(registros, desde, hasta):
 
     # --- detalle: una fila por vehiculo pedido ---
     claves = [k for k, _ in COLUMNAS]
-    _escribir(base + ".txt", base + ".csv",
+    _escribir(base + ".csv",
               [t for _, t in COLUMNAS],
               [[r.get(k, "") for k in claves] for r in registros])
 
@@ -373,7 +369,7 @@ def guardar(registros, desde, hasta):
     filas = [[g["fecha"], g["estacion"], g["nombre_estacion"], g["vehiculo"],
               g["flota"], g["total"]] + [g.get(e, 0) for e in estados_vistos]
              for g in grupos]
-    _escribir(base + "_resumen.txt", base + "_resumen.csv", enc, filas)
+    _escribir(base + "_resumen.csv", enc, filas)
 
     return base + ".csv", base + "_resumen.csv"
 
