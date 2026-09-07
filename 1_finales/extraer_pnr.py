@@ -388,13 +388,13 @@ COLUMNAS_CONTROL = [
 ]
 
 
-def guardar_control(registros, periodo):
+def guardar_control(registros, periodo, sello=None):
     """El archivo con las columnas del control, en su orden.
 
     A diferencia del otro formato, aqui NO se omiten las columnas vacias:
     la hoja espera siempre las mismas doce, en el mismo sitio.
     """
-    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sello = sello or datetime.now().strftime("%Y%m%d_%H%M%S")
     csvf = os.path.join(BASE_DIR, f"pnr_{periodo}_{sello}_control.csv")
     with open(csvf, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, delimiter=";")
@@ -404,8 +404,13 @@ def guardar_control(registros, periodo):
     return csvf
 
 
-def guardar(registros, periodo, con_extras=False, con_detalle=False):
-    """Escribe el TXT (para pegar en Excel) y el CSV."""
+def guardar(registros, periodo, con_extras=False, con_detalle=False,
+            sello=None):
+    """Escribe el CSV.
+
+    El TXT ya no se genera: duplicaba cada archivo y el CSV se abre igual
+    en Excel.
+    """
     cols = COLUMNAS + (COLUMNAS_EXTRA if con_extras else [])
     if con_detalle:
         # Solo las columnas del detalle que traigan algo: si un periodo no
@@ -415,24 +420,20 @@ def guardar(registros, periodo, con_extras=False, con_detalle=False):
     encabezados = [titulo for _, titulo in cols]
     claves = [clave for clave, _ in cols]
 
-    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"pnr_{periodo}_{sello}"
-    txt = os.path.join(BASE_DIR, base + ".txt")
-    csvf = os.path.join(BASE_DIR, base + ".csv")
+    # Si no se da sello, cada llamada crea su archivo. Pasarlo permite que
+    # el listado y el del control lleven el mismo, y que reescribir el
+    # listado con los detalles pise el suyo en vez de dejar dos.
+    sello = sello or datetime.now().strftime("%Y%m%d_%H%M%S")
+    csvf = os.path.join(BASE_DIR, f"pnr_{periodo}_{sello}.csv")
 
     # utf-8-sig: sin el BOM, Excel rompe los acentos
-    with open(txt, "w", encoding="utf-8-sig", newline="") as f:
-        f.write("\t".join(encabezados) + "\n")
-        for r in registros:
-            f.write("\t".join(limpiar(r.get(k, "")) for k in claves) + "\n")
-
     with open(csvf, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(encabezados)
         for r in registros:
             w.writerow([limpiar(r.get(k, "")) for k in claves])
 
-    return txt, csvf
+    return csvf
 
 
 def resumen(registros):
@@ -472,15 +473,15 @@ def main():
 
         # Se guarda el listado ANTES de pedir los detalles: si el segundo
         # paso falla o lo interrumpen, no se pierde lo ya traido.
-        txt, csvf = guardar(registros, periodo, con_extras=True)
+        csvf = guardar(registros, periodo, con_extras=True)
 
         detalle = "--detalle" in [a.lower() for a in sys.argv]
         if detalle:
             log(f"Abriendo la ficha de cada uno de los {len(registros)} casos...")
             n = completar_detalles(driver, registros)
             log(f"Detalles completos: {n}/{len(registros)}")
-            txt, csvf = guardar(registros, periodo, con_extras=True,
-                                con_detalle=True)
+            csvf = guardar(registros, periodo, con_extras=True,
+                           con_detalle=True)
         por_estado, suma, sin_monto = resumen(registros)
 
         print("\n" + "=" * 62)

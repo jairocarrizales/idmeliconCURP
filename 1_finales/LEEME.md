@@ -43,7 +43,7 @@ Periodo [ agosto 2026 · Q2 (16 al 31) ▾]   ☐ Con ruta y CEDIS
 Viene puesto el **período en curso** —Q1 es del 1 al 15, Q2 del 16 al fin
 de mes—, y la lista llega hasta un año atrás.
 
-Salida: `pnr_<período>_<sello>.txt` y `.csv`
+Salida: `pnr_<período>_<sello>.csv` (este no genera TXT)
 
 ```
 Driver | ID paquete | Monto | Descripcion
@@ -100,6 +100,9 @@ FECHA DE CIERRE DE CASO
 Marcarla enciende sola *Abrir cada caso*: ocho de las doce salen de la
 ficha. A diferencia del otro archivo, **aquí no se omite ninguna columna
 aunque venga vacía** — la hoja espera siempre las doce en su sitio.
+
+**Si marcas solo esta casilla, baja solo este archivo.** El listado
+completo no se escribe: sería un archivo que nadie abre.
 
 Medido contra 448 casos reales, **once de las doce se llenan solas**:
 

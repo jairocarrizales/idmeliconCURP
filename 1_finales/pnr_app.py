@@ -78,10 +78,23 @@ class Trabajador(QObject):
                     "Prueba con el periodo anterior.")
                 return
 
-            # Se guarda ANTES de los detalles: si el segundo paso falla,
-            # no se pierde lo que ya costo traer.
-            self.log("Guardando el listado...")
-            txt, csvf = nucleo.guardar(self.registros, periodo, con_extras)
+            # Si solo se pidio el formato del control, ese es el unico
+            # archivo que interesa: escribir ademas el listado completo
+            # llenaria la carpeta de archivos que nadie abre.
+            solo_control = con_control and not con_extras
+
+            # Un unico sello para toda la extraccion: asi el listado
+            # con detalles pisa al de antes en vez de dejar dos archivos
+            # casi iguales, y el del control queda emparejado con el.
+            sello = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            csvf = None
+            if not solo_control:
+                # Se guarda ANTES de los detalles: si el segundo paso
+                # falla, no se pierde lo que ya costo traer.
+                self.log("Guardando el listado...")
+                csvf = nucleo.guardar(self.registros, periodo,
+                                      con_extras, sello=sello)
 
             if con_detalle:
                 self.log(f"Abriendo la ficha de cada uno de los "
@@ -89,15 +102,17 @@ class Trabajador(QObject):
                 n = nucleo.completar_detalles(
                     self.driver, self.registros, avisar=self.log)
                 self.log(f"Detalles completos: {n}/{len(self.registros)}")
-                txt, csvf = nucleo.guardar(self.registros, periodo,
-                                           con_extras, con_detalle=True)
+                if not solo_control:
+                    csvf = nucleo.guardar(self.registros, periodo,
+                                          con_extras, con_detalle=True,
+                                          sello=sello)
 
             if con_control:
-                ctrl = nucleo.guardar_control(self.registros, periodo)
-                self.log(f"Formato del control: {os.path.basename(ctrl)}")
+                csvf = nucleo.guardar_control(self.registros, periodo,
+                                              sello=sello)
 
             self.log(f"Listo: {os.path.basename(csvf)}")
-            self.p.terminado.emit("extraido", (self.registros, txt, csvf))
+            self.p.terminado.emit("extraido", (self.registros, csvf))
 
         except Exception as e:
             traceback.print_exc()
@@ -348,7 +363,7 @@ class Ventana(QMainWindow):
                 "Paso 2 de 2  ·  Inicia sesion y presiona EXTRAER CASOS")
             return
 
-        registros, txt, csvf = datos
+        registros, csvf = datos
         self.archivo = csvf
         por_estado, suma, sin_monto = nucleo.resumen(registros)
 
