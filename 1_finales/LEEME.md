@@ -56,6 +56,45 @@ Marcando **Con ruta y CEDIS** se agregan siete columnas más —número de
 caso, fecha, estado, motivo, ruta, ID de ruta y CEDIS—. No cuestan nada:
 vienen en la misma respuesta, solo que la pantalla no las enseña todas.
 
+### `Abrir cada caso` — lo que solo se ve al entrar
+
+La segunda casilla entra a la ficha de cada reclamo y trae 26 columnas
+más. **357 casos en 69 segundos**, medido.
+
+```
+ID conductor | Conductor | Telefono | ID vehiculo | Nombre ruta |
+Transportadora | ID envio | Valor de la compra | Reclamante |
+Designado para recibir | ID seguimiento | Mensaje del reclamo |
+Productos | Precios | Cuantos productos | Fecha de entrega |
+Quien recibio | Nombre de quien recibio | Documento | Geo de la foto |
+Geo de la direccion | Distancia entre geos | Evidencias | Prefactura |
+ID comprador | ID reclamo
+```
+
+Lo más útil de ahí es el **ID del conductor**: lo traen los 357 casos, y
+es lo que cruza con el padrón de `DriversMeli.exe` sin depender del
+nombre —que se repite entre personas distintas—.
+
+También vienen los **productos con su precio** (útil cuando el reclamo
+es por uno solo de varios), **quién firmó la entrega** y la
+**geolocalización de la evidencia** con su distancia a la dirección: si
+la foto se tomó a 300 metros del domicilio, ahí se ve.
+
+Dos columnas se omiten solas porque MELI las manda vacías: *Periodo de
+facturación* (el que vale es el que pediste) y *Voluminoso*. El programa
+solo escribe las columnas que tienen dato en al menos una fila.
+
+### Por qué el detalle no usa una API
+
+La ficha del caso **no pide datos a ninguna API**: la página
+`/case-center/cases/<id>` viene armada desde el servidor con los datos
+ya dentro, en un objeto `caseDetail`. El programa lo recorta del HTML en
+vez de raspar la pantalla, contando llaves para saber dónde termina.
+
+Ese recorte se hace **dentro del navegador**: cada página pesa cerca de
+1 MB y traer 357 enteras a Python agotaría la memoria de Chrome. Lo que
+cruza son unos 7 KB por caso.
+
 ### Los casos sin conductor
 
 Algunos reclamos llegan con el nombre en blanco: Mercado Libre todavía no

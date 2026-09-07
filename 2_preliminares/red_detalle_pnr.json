@@ -1,0 +1,9 @@
+[
+  {
+    "url": "https://envios.adminml.com/logistics/case-center/modules/__resolve_props?module=case-center-melichat&consumer=shipping-logistics-toc-front",
+    "metodo": "GET",
+    "status": 200,
+    "postData": null,
+    "body": "{\"scope\":\"prod\",\"basePath\":\"/logistics/case-center/\",\"melichatAccessToken\":\"7d55ed8a714ec0f73ad70088dedd790def8b6c157162e9dae54b1690bb8c2021edc02b1b107513c2cfa8ae52f2f27afeccad3b552c1e388015d4b07b84a4b24a6504dffb88fa2ca66b21a2c4d50d94a4cb59e7fef85d8236473fdb17041ef9b0b29684\"}"
+  }
+]

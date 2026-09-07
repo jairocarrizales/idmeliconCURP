@@ -36,7 +36,7 @@ class Ordenes(QObject):
     """Las ordenes viajan por señal: si se llamara al metodo directamente,
     correria en el hilo de la ventana y la congelaria."""
     abrir = Signal()
-    extraer = Signal(str, bool)
+    extraer = Signal(str, bool, bool)
     cerrar = Signal()
 
 
@@ -61,8 +61,8 @@ class Trabajador(QObject):
         except Exception as e:
             self.p.fallo.emit(self._explicar(e))
 
-    @Slot(str, bool)
-    def extraer(self, periodo, con_extras):
+    @Slot(str, bool, bool)
+    def extraer(self, periodo, con_extras, con_detalle):
         try:
             if not self.driver:
                 self.p.fallo.emit("Primero abre Chrome e inicia sesion.")
@@ -78,8 +78,20 @@ class Trabajador(QObject):
                     "Prueba con el periodo anterior.")
                 return
 
-            self.log("Guardando...")
+            # Se guarda ANTES de los detalles: si el segundo paso falla,
+            # no se pierde lo que ya costo traer.
+            self.log("Guardando el listado...")
             txt, csvf = nucleo.guardar(self.registros, periodo, con_extras)
+
+            if con_detalle:
+                self.log(f"Abriendo la ficha de cada uno de los "
+                         f"{len(self.registros)} casos...")
+                n = nucleo.completar_detalles(
+                    self.driver, self.registros, avisar=self.log)
+                self.log(f"Detalles completos: {n}/{len(self.registros)}")
+                txt, csvf = nucleo.guardar(self.registros, periodo,
+                                           con_extras, con_detalle=True)
+
             self.log(f"Listo: {os.path.basename(csvf)}")
             self.p.terminado.emit("extraido", (self.registros, txt, csvf))
 
@@ -213,6 +225,16 @@ class Ventana(QMainWindow):
             f"QCheckBox::indicator:checked {{ background: {AZUL};"
             f" border-color: {AZUL}; }}")
         fila.addWidget(self.chk_extras)
+
+        self.chk_detalle = QCheckBox("Abrir cada caso")
+        self.chk_detalle.setCursor(Qt.PointingHandCursor)
+        self.chk_detalle.setToolTip(
+            "Entra a la ficha de cada caso y trae lo que solo se ve ahi:\n"
+            "ID y telefono del conductor, productos con su precio, quien\n"
+            "recibio, la geo de la evidencia y el reclamante.\n\n"
+            "Tarda cerca de un minuto por cada 350 casos.")
+        self.chk_detalle.setStyleSheet(self.chk_extras.styleSheet())
+        fila.addWidget(self.chk_detalle)
         fila.addStretch()
         raiz.addLayout(fila)
 
@@ -289,7 +311,9 @@ class Ventana(QMainWindow):
         periodo = self.combo.currentData()
         self.b_extraer.setEnabled(False)
         self.paso.setText(f"Extrayendo los casos de {periodo}...")
-        self.ordenes.extraer.emit(periodo, self.chk_extras.isChecked())
+        self.ordenes.extraer.emit(periodo,
+                                  self.chk_extras.isChecked(),
+                                  self.chk_detalle.isChecked())
 
     def al_carpeta(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(_carpeta_base()))

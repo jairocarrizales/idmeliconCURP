@@ -328,10 +328,48 @@ COLUMNAS_EXTRA = [
     ("cedis", "CEDIS"),
 ]
 
+# Lo que solo aparece al abrir el caso. Ordenadas como en la pantalla:
+# primero quien reclama, luego que se entrego, despues quien lo llevo.
+COLUMNAS_DETALLE = [
+    ("id_conductor", "ID conductor"),
+    ("conductor", "Conductor (detalle)"),
+    ("telefono", "Telefono conductor"),
+    ("id_vehiculo", "ID vehiculo"),
+    ("nombre_ruta", "Nombre ruta"),
+    ("transportadora", "Transportadora"),
+    ("envio", "ID envio"),
+    ("valor_compra", "Valor de la compra"),
+    ("reclamante", "Reclamante"),
+    ("designado", "Designado para recibir"),
+    ("seguimiento", "ID seguimiento"),
+    ("mensaje", "Mensaje del reclamo"),
+    ("productos", "Productos"),
+    ("precios_productos", "Precios"),
+    ("cantidad_productos", "Cuantos productos"),
+    ("fecha_entrega", "Fecha de entrega"),
+    ("recibio_quien", "Quien recibio"),
+    ("recibio_nombre", "Nombre de quien recibio"),
+    ("recibio_documento", "Documento"),
+    ("geo_foto", "Geo de la foto"),
+    ("geo_direccion", "Geo de la direccion"),
+    ("distancia_geo", "Distancia entre geos"),
+    ("evidencias", "Evidencias"),
+    ("periodo_facturacion", "Periodo facturacion"),
+    ("prefactura", "Prefactura"),
+    ("id_comprador", "ID comprador"),
+    ("id_reclamo", "ID reclamo"),
+    ("voluminoso", "Voluminoso"),
+]
 
-def guardar(registros, periodo, con_extras=False):
+
+def guardar(registros, periodo, con_extras=False, con_detalle=False):
     """Escribe el TXT (para pegar en Excel) y el CSV."""
     cols = COLUMNAS + (COLUMNAS_EXTRA if con_extras else [])
+    if con_detalle:
+        # Solo las columnas del detalle que traigan algo: si un periodo no
+        # tiene evidencias, no vale la pena una columna vacia
+        cols = cols + [(k, t) for k, t in COLUMNAS_DETALLE
+                       if any(r.get(k) for r in registros)]
     encabezados = [titulo for _, titulo in cols]
     claves = [clave for clave, _ in cols]
 
@@ -390,7 +428,17 @@ def main():
             log("No se encontraron casos en ese periodo.")
             return
 
+        # Se guarda el listado ANTES de pedir los detalles: si el segundo
+        # paso falla o lo interrumpen, no se pierde lo ya traido.
         txt, csvf = guardar(registros, periodo, con_extras=True)
+
+        detalle = "--detalle" in [a.lower() for a in sys.argv]
+        if detalle:
+            log(f"Abriendo la ficha de cada uno de los {len(registros)} casos...")
+            n = completar_detalles(driver, registros)
+            log(f"Detalles completos: {n}/{len(registros)}")
+            txt, csvf = guardar(registros, periodo, con_extras=True,
+                                con_detalle=True)
         por_estado, suma, sin_monto = resumen(registros)
 
         print("\n" + "=" * 62)
@@ -418,3 +466,342 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --------------------------------------------------------------- DETALLE
+#
+# El detalle de un caso NO tiene API propia: la pagina
+#
+#     /logistics/case-center/cases/<id caso>
+#
+# se dibuja en el servidor y trae los datos como JSON dentro del HTML, en
+# un objeto "caseDetail". Se busca ahi en vez de raspar la pantalla.
+
+URL_DETALLE = "https://envios.adminml.com/logistics/case-center/cases/"
+
+# Cuantos casos se piden a la vez. Cada uno es una pagina completa (~3 MB
+# de HTML), asi que el lote va mas corto que en otros extractores para no
+# llenar la memoria de Chrome.
+LOTE_DETALLES = 6
+PAUSA_DETALLES = 0.3
+REINTENTOS_DETALLE = 2
+
+
+def _recortar_json(html, clave):
+    """Saca el objeto JSON que sigue a "clave": del HTML.
+
+    Cuenta llaves para hallar donde termina, respetando las que van
+    dentro de un texto. Un recorte a ojo daria 'Unterminated string'.
+    """
+    marca = '"%s":' % clave
+    i = html.find(marca)
+    if i < 0:
+        return None
+    try:
+        ini = html.index("{", i + len(marca))
+    except ValueError:
+        return None
+
+    prof, en_texto, escapado = 0, False, False
+    for j in range(ini, len(html)):
+        c = html[j]
+        if escapado:
+            escapado = False
+            continue
+        if c == "\\":
+            escapado = True
+            continue
+        if c == '"':
+            en_texto = not en_texto
+            continue
+        if en_texto:
+            continue
+        if c == "{":
+            prof += 1
+        elif c == "}":
+            prof -= 1
+            if prof == 0:
+                try:
+                    return json.loads(html[ini:j + 1])
+                except ValueError:
+                    return None
+    return None
+
+
+def _pares(obj, salida=None):
+    """Todo par etiqueta/valor del detalle, este donde este anidado.
+
+    Las tarjetas guardan sus filas en mainContent.mainRows[].cells[].
+    primary, y cada tipo de tarjeta lo anida distinto; recorrer el arbol
+    entero es mas corto y no se rompe si cambian la forma.
+    """
+    if salida is None:
+        salida = []
+    if isinstance(obj, dict):
+        if "label" in obj and ("value" in obj or "text" in obj):
+            etiqueta = limpiar(obj.get("label"))
+            valor = obj.get("value", obj.get("text"))
+            if etiqueta:
+                salida.append((etiqueta, valor))
+        for v in obj.values():
+            _pares(v, salida)
+    elif isinstance(obj, list):
+        for v in obj:
+            _pares(v, salida)
+    return salida
+
+
+# Como se llaman en el archivo los datos del detalle. La clave es la
+# etiqueta tal como la escribe Mercado Libre; sin tildes para que no
+# dependa de como venga codificada.
+ETIQUETAS = {
+    "ID de envio": "envio",
+    "Valor de la compra": "valor_compra",
+    "Nombre del reclamante": "reclamante",
+    "Designado para recibir": "designado",
+    "ID de seguimiento": "seguimiento",
+    "Mensaje del reclamo": "mensaje",
+    "Fecha de entrega": "fecha_entrega",
+    "Recibio": "recibio_quien",
+    "Nombre completo": "recibio_nombre",
+    "Documento": "recibio_documento",
+    "Ruta": "ruta_detalle",
+    "Transportadora": "transportadora",
+    "Conductor": "conductor",
+    "ID del conductor": "id_conductor",
+    "Telefono": "telefono",
+    "Geo de la foto": "geo_foto",
+    "Geo de la direccion": "geo_direccion",
+    "Distancia entre geolocalizaciones": "distancia_geo",
+}
+
+
+def sin_tildes(t):
+    """Para comparar etiquetas sin depender de la codificacion."""
+    reemplazos = (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"),
+                  ("ú", "u"), ("ñ", "n"), ("Á", "A"), ("É", "E"),
+                  ("Í", "I"), ("Ó", "O"), ("Ú", "U"), ("Ñ", "N"))
+    for a, b in reemplazos:
+        t = t.replace(a, b)
+    return t
+
+
+def normalizar_detalle(det):
+    """El objeto caseDetail convertido en campos planos."""
+    if not det:
+        return {}
+
+    salida = {}
+
+    # Los IDs con los que se cruza contra el padron y las rutas
+    for r in det.get("references") or []:
+        tipo = limpiar(r.get("reference_type"))
+        valor = limpiar(r.get("value"))
+        detalle = limpiar(r.get("detail"))
+        if tipo == "DRIVER_ID":
+            salida["id_conductor"] = valor
+        elif tipo == "VEHICLE_ID":
+            salida["id_vehiculo"] = valor
+        elif tipo == "BUYER_USER_ID":
+            salida["id_comprador"] = valor
+        elif tipo == "CLAIM_ID":
+            salida["id_reclamo"] = valor
+        elif tipo == "ROUTE_ID":
+            salida["ruta_detalle"] = valor
+            if detalle:
+                salida["nombre_ruta"] = detalle
+        elif tipo == "CARRIER_ID":
+            salida["transportadora"] = detalle or valor
+
+    # Las tarjetas: reclamo, quien recibio, ruta, evidencias
+    for etiqueta, valor in _pares(det):
+        clave = ETIQUETAS.get(sin_tildes(etiqueta))
+        if clave and not salida.get(clave):
+            salida[clave] = limpiar(valor)
+
+    # La fecha de entrega llega en ISO; se deja como en el resto
+    fe = salida.get("fecha_entrega") or ""
+    if len(fe) >= 16 and "T" in fe:
+        salida["fecha_entrega"] = "%s/%s/%s %s" % (fe[8:10], fe[5:7],
+                                                   fe[0:4], fe[11:16])
+
+    # Los productos del envio, con su precio
+    productos, precios = [], []
+    for p in (det.get("pnrClaimConfig") or {}).get("products") or []:
+        titulo = limpiar(p.get("title"))
+        if titulo:
+            productos.append(titulo)
+            pago = p.get("payment") or {}
+            if pago.get("amount") is not None:
+                precios.append(str(pago["amount"]))
+    if productos:
+        salida["productos"] = " | ".join(productos)
+        salida["precios_productos"] = " | ".join(precios)
+        salida["cantidad_productos"] = str(len(productos))
+
+    # Datos sueltos que solo estan en el detalle
+    # billingPeriod llega vacio en la practica (los 357 casos de una
+    # prueba real); el periodo de verdad es el que se pidio. Se conserva
+    # por si algun caso lo trae, y guardar() omite la columna si no.
+    salida["periodo_facturacion"] = limpiar(det.get("billingPeriod"))
+    salida["prefactura"] = limpiar(det.get("preInvoiceNumber"))
+    salida["estacion_destino"] = limpiar(det.get("origin"))
+    salida["estado_detalle"] = limpiar(det.get("status"))
+    if det.get("bulky"):
+        salida["voluminoso"] = "Si"
+
+    # La geo de la evidencia, con sus coordenadas crudas
+    geo = (det.get("caseDataComponent") or {}).get("order.geo_incident_data")
+    if isinstance(geo, dict):
+        foto = geo.get("evidence_location") or {}
+        parada = geo.get("stop_location") or {}
+        if foto.get("latitude") or foto.get("longitude"):
+            salida["lat_foto"] = str(foto.get("latitude", ""))
+            salida["lon_foto"] = str(foto.get("longitude", ""))
+        if parada.get("latitude") or parada.get("longitude"):
+            salida["lat_parada"] = str(parada.get("latitude", ""))
+            salida["lon_parada"] = str(parada.get("longitude", ""))
+        if geo.get("distance"):
+            salida["distancia_metros"] = str(geo.get("distance"))
+        salida["evidencias"] = str(len(geo.get("evidences") or []))
+
+    return salida
+
+
+SCRIPT_LOTE_HTML = """
+const base = arguments[0];
+const ids  = arguments[1];
+const done = arguments[arguments.length - 1];
+Promise.all(ids.map(id =>
+  fetch(base + id, {credentials: 'include'})
+    .then(r => r.ok ? r.text() : null)
+    .then(t => {
+      if (!t) return {id: id, ok: false, json: null};
+      // Recortar en el navegador: devolver 3 MB de HTML por caso
+      // llenaria la memoria. Se busca el objeto caseDetail y se manda
+      // solo eso (unos 7 KB).
+      const marca = '"caseDetail":';
+      const i = t.indexOf(marca);
+      if (i < 0) { t = null; return {id: id, ok: false, json: null}; }
+      let ini = t.indexOf('{', i + marca.length);
+      let prof = 0, enTexto = false, escapado = false, fin = -1;
+      for (let j = ini; j < t.length; j++) {
+        const c = t[j];
+        if (escapado) { escapado = false; continue; }
+        // La barra invertida se compara por su codigo (92):
+        // escribirla como literal obliga a escaparla dos veces
+        // (Python y JavaScript) y es facil dejarla mal, lo que
+        // rompe el script entero con 'Invalid or unexpected token'.
+        if (c.charCodeAt(0) === 92) { escapado = true; continue; }
+        if (c === '"') { enTexto = !enTexto; continue; }
+        if (enTexto) continue;
+        if (c === '{') prof++;
+        else if (c === '}') { prof--; if (prof === 0) { fin = j + 1; break; } }
+      }
+      const trozo = fin > 0 ? t.substring(ini, fin) : null;
+      t = null;
+      return {id: id, ok: !!trozo, json: trozo};
+    })
+    .catch(() => ({id: id, ok: false, json: null}))
+)).then(done);
+"""
+
+
+def pedir_lote_detalles(driver, ids):
+    """Pide varias fichas a la vez y devuelve {id: caseDetail}.
+
+    El recorte se hace dentro del navegador: cada pagina pesa ~3 MB y
+    traerlas enteras a Python agotaria la memoria de Chrome en un lote
+    de 350 casos.
+    """
+    driver.set_script_timeout(180)
+    respuestas = driver.execute_async_script(
+        SCRIPT_LOTE_HTML, URL_DETALLE, [str(i) for i in ids])
+
+    salida = {}
+    for r in respuestas or []:
+        if not r or not r.get("ok") or not r.get("json"):
+            continue
+        try:
+            salida[str(r.get("id"))] = json.loads(r["json"])
+        except ValueError:
+            continue
+    return salida
+
+
+def completar_detalles(driver, registros, avisar=None):
+    """Trae el detalle de cada caso y lo suma a su registro.
+
+    Devuelve cuantos se completaron. Los que fallen se reintentan en
+    lotes mas chicos: casi siempre es intermitencia, no un caso roto.
+    """
+    avisar = avisar or (lambda *a: None)
+    porhacer = [r for r in registros if r.get("caso")]
+    if not porhacer:
+        return 0
+
+    # El fetch se lanza desde la pagina: si el navegador quedo en otra
+    # parte, la politica de origen lo bloquea y fallan TODOS en silencio.
+    preparar_pagina(driver)
+
+    por_id = {r["caso"]: r for r in porhacer}
+    hechos = 0
+    faltan = list(por_id.keys())
+
+    for vuelta in range(REINTENTOS_DETALLE + 1):
+        if not faltan:
+            break
+        # Cada reintento va con lotes mas chicos y mas pausa
+        tam = max(2, LOTE_DETALLES // (vuelta + 1))
+        pausa = PAUSA_DETALLES * (vuelta + 1)
+        if vuelta:
+            log(f"Reintento {vuelta}: {len(faltan)} casos en lotes de {tam}")
+
+        pendientes = faltan
+        faltan = []
+        fallo_dicho = False
+        for i in range(0, len(pendientes), tam):
+            lote = pendientes[i:i + tam]
+            try:
+                fichas = pedir_lote_detalles(driver, lote)
+            except Exception as e:
+                # Callar el error deja 357 ceros sin explicacion. Se dice
+                # una vez por vuelta: repetirlo 60 veces tampoco ayuda.
+                texto = str(e)
+                if not fallo_dicho:
+                    log(f"Fallo al pedir el detalle: {texto[:160]}")
+                    fallo_dicho = True
+                if ("out of memory" in texto.lower()
+                        or "frame detached" in texto.lower()):
+                    log("Chrome se quedo sin memoria; liberando...")
+                    _liberar_memoria(driver)
+                fichas = {}
+
+            for cid in lote:
+                det = fichas.get(cid)
+                if det:
+                    por_id[cid].update(normalizar_detalle(det))
+                    hechos += 1
+                else:
+                    faltan.append(cid)
+
+            avisar(f"detalles {hechos}/{len(por_id)}")
+            if hechos % 60 < tam:
+                log(f"Detalles: {hechos}/{len(por_id)}")
+            time.sleep(pausa)
+
+    if faltan:
+        log(f"{len(faltan)} casos no devolvieron detalle.")
+    return hechos
+
+
+def _liberar_memoria(driver):
+    """Recarga en blanco para que Chrome suelte lo acumulado."""
+    try:
+        actual = driver.current_url
+        driver.get("about:blank")
+        time.sleep(1.5)
+        driver.get(actual)
+        time.sleep(2.5)
+    except Exception:
+        pass
