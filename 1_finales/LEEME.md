@@ -34,61 +34,19 @@ Cuatro columnas: quién es y si está activo o bloqueado.
 ## `CasosPNR.exe` — los reclamos
 
 Los reclamos PNR (paquetes no recibidos) de la Bandeja de soporte, que la
-web muestra de 30 en 30 y sin forma de exportar.
+web muestra de 30 en 30 y ya no deja exportar.
 
 ```
-Periodo [ agosto 2026 · Q2 (16 al 31) ▾]   ☐ Con ruta y CEDIS
+Periodo [ agosto 2026 · Q2 (16 al 31) ▾]
+Genera el CSV con las 23 columnas de la plataforma
 ```
 
-Viene puesto el **período en curso** —Q1 es del 1 al 15, Q2 del 16 al fin
-de mes—, y la lista llega hasta un año atrás.
+**Solo hay que elegir el período** —viene puesto el que está en curso— y
+presionar extraer. No hay opciones: el programa hace siempre lo mismo.
 
-Salida: `pnr_<período>_<sello>.csv` (este no genera TXT)
-
-```
-Driver | ID paquete | Monto | Descripcion
-```
-
-`Descripcion` es el estado del caso tal como lo muestra la pantalla:
-*Esperando comprobante*, *Anulado*, *Enviado a facturación*.
-
-Marcando **Con ruta y CEDIS** se agregan siete columnas más —número de
-caso, fecha, estado, motivo, ruta, ID de ruta y CEDIS—. No cuestan nada:
-vienen en la misma respuesta, solo que la pantalla no las enseña todas.
-
-### `Abrir cada caso` — lo que solo se ve al entrar
-
-La segunda casilla entra a la ficha de cada reclamo y trae 26 columnas
-más. **357 casos en 69 segundos**, medido.
-
-```
-ID conductor | Conductor | Telefono | ID vehiculo | Nombre ruta |
-Transportadora | ID envio | Valor de la compra | Reclamante |
-Designado para recibir | ID seguimiento | Mensaje del reclamo |
-Productos | Precios | Cuantos productos | Fecha de entrega |
-Quien recibio | Nombre de quien recibio | Documento | Geo de la foto |
-Geo de la direccion | Distancia entre geos | Evidencias | Prefactura |
-ID comprador | ID reclamo
-```
-
-Lo más útil de ahí es el **ID del conductor**: lo traen los 357 casos, y
-es lo que cruza con el padrón de `DriversMeli.exe` sin depender del
-nombre —que se repite entre personas distintas—.
-
-También vienen los **productos con su precio** (útil cuando el reclamo
-es por uno solo de varios), **quién firmó la entrega** y la
-**geolocalización de la evidencia** con su distancia a la dirección: si
-la foto se tomó a 300 metros del domicilio, ahí se ve.
-
-Dos columnas se omiten solas porque MELI las manda vacías: *Periodo de
-facturación* (el que vale es el que pediste) y *Voluminoso*. El programa
-solo escribe las columnas que tienen dato en al menos una fila.
-
-### `Formato del control` — el CSV que daba la plataforma
-
-La tercera casilla genera **un archivo aparte** con las mismas 23
-columnas, el mismo orden, el mismo nombre y el mismo formato que el CSV
-que la plataforma dejaba descargar antes de quitar el botón:
+Salida: **un archivo**, con el nombre, las columnas, el orden y el
+formato del CSV que la plataforma dejaba descargar antes de quitar el
+botón:
 
 ```
 LOGISTICS_PNR - 202608Q2_<sello>.csv
@@ -104,11 +62,15 @@ ESTACION DE ORIGEN | RUTA | ID DEL CONDUCTOR | FECHA DE ENTREGA |
 ID DE RECLAMO | FECHA DEL RECLAMO
 ```
 
-Va con **separador coma y sin BOM**, y las fechas en ISO
-(`2026-08-19T18:13:41`), igual que el original — así entra en el mismo
-sitio donde entraba aquel.
+Separador coma, sin BOM y fechas en ISO (`2026-08-19T18:13:41`), igual
+que el original: entra donde entraba aquel.
 
-Medido contra 448 casos reales, **21 de las 23 se llenan**:
+Tarda **unos 80 segundos** con 450 casos. La mayor parte se va abriendo
+la ficha de cada uno, porque la mitad de las columnas solo están ahí.
+
+### Cuánto se llena
+
+Medido contra 448 casos reales, **21 de las 23**:
 
 ```
 ID DEL CASO                448/448     REP - ASISTENTE             82/448
@@ -125,103 +87,41 @@ VALOR DE LA COMPRA         448/448     ID DE RECLAMO              448/448
                                        FECHA DEL RECLAMO            0/448
 ```
 
-Las de revisión salen 82 porque solo 82 casos tuvieron una. Las dos que
-salen en cero —*Comentario de cierre* y *Fecha del reclamo*— **también
-venían vacías en el CSV original**: la primera en todas sus filas, la
-segunda en todas menos dos de 2024.
+Las de revisión salen 82 porque solo 82 casos tuvieron una. Las dos en
+cero —*Comentario de cierre* y *Fecha del reclamo*— **también venían
+vacías en el CSV original**: la primera en todas sus filas, la segunda en
+todas menos dos de 2024.
 
-Marcarla enciende sola *Abrir cada caso*: la mitad de las columnas salen
-de la ficha. **Si marcas solo esta casilla, baja solo este archivo.**
+### De dónde sale cada cosa
 
-### Por qué el detalle no usa una API
+El listado da doce columnas de un tirón:
 
-La ficha del caso **no pide datos a ninguna API**: la página
-`/case-center/cases/<id>` viene armada desde el servidor con los datos
-ya dentro, en un objeto `caseDetail`. El programa lo recorta del HTML en
-vez de raspar la pantalla, contando llaves para saber dónde termina.
+```
+POST /logistics/case-center/api/feed/search-feed-cases-dec
+```
 
-Ese recorte se hace **dentro del navegador**: cada página pesa cerca de
-1 MB y traer 357 enteras a Python agotaría la memoria de Chrome. Lo que
-cruza son unos 7 KB por caso.
+El resto vive en la ficha de cada caso, que **no pide datos a ninguna
+API**: la página `/case-center/cases/<id>` viene armada desde el servidor
+con un objeto `caseDetail` dentro del HTML. El programa lo recorta
+contando llaves, y lo hace **dentro del navegador**: cada página pesa
+cerca de 1 MB, y traer 450 enteras a Python agotaría la memoria de
+Chrome. Cruzan unos 7 KB por caso.
+
+Las fechas de cierre y revisión salen del historial (`events`), y el
+texto de la revisión de las notas (`notes`).
 
 ### Los casos sin conductor
 
 Algunos reclamos llegan con el nombre en blanco: Mercado Libre todavía no
 asignó conductor. El programa los deja vacíos en vez de inventarlos, y al
-terminar dice cuántos son. Como sí traen el **número de ruta**, se pueden
-cruzar después con el reporte de rutas, igual que hace la prefactura.
+terminar dice cuántos son. Aun así traen su **ID de conductor**, que es
+lo que cruza con el padrón de `DriversMeli.exe` sin depender del nombre
+—que se repite entre personas distintas—.
 
 ### Por qué son 12 vueltas
 
 La API acepta **30 casos por página y ni uno más** — con 50 responde 400.
-Así que 351 casos son 12 consultas. Aun así tarda unos 10 segundos.
-
-## `CapacidadMeli.exe` — los pedidos de vehículos
-
-Lo que Mercado Libre pide cada día: cuántos vehículos, de qué tipo, en qué
-estación, y qué se hizo con cada pedido.
-
-```
-Desde [ 01/09/2026 📅]  Hasta [ 01/09/2026 📅]  [Ayer] [7] [15] [30 días]
-```
-
-Viene puesto en **ayer**. La pantalla del panel agrupa por estación y hay
-que desplegar cada grupo a mano; aquí sale todo de una vez.
-
-Salida: **dos CSV** (este no genera TXT; el CSV se abre igual en Excel).
-
-El detalle, una fila por vehículo pedido:
-
-```
-Fecha | Estacion | Nombre estacion | Tipo de vehiculo | Estado | Flota |
-SDD | Ciclo | ETA | ETD | ID pedido | ID viaje | Creado
-```
-
-Y el resumen, una fila por estación y tipo con los estados en columnas:
-
-```
-Fecha | Estacion | Nombre estacion | Tipo de vehiculo | Flota | Total |
-Para responder | Aceptado | Expirado | Rechazado | Cancelado por MELI
-```
-
-Ese segundo es el que sirve para planear: de un vistazo se ve que EQR2
-pidió 50 Small Van y se aceptaron las 50.
-
-### Sobre las fechas
-
-El día del panel va de **06:00 Z a 06:00 Z**, que es la medianoche en
-Ciudad de México. El programa usa esa misma hora de corte, así que un
-rango de varios días no se corre ni pierde pedidos del borde.
-
-Los días se consultan **uno por uno** —la API los devuelve así aunque le
-pidas un rango—, a razón de medio segundo cada uno. Cinco días tardan
-unos 3 segundos; un mes, unos 15. Si un día no tiene pedidos, lo dice y
-sigue con los demás.
-
-### Hasta cuándo hay historial
-
-Mercado Libre no guarda esto para siempre. El botón **Hasta cuando hay
-datos** lo averigua por bisección —9 consultas, no cientos— y ofrece
-poner esa fecha en *Desde*. Medido el 2 de septiembre de 2026, el límite
-estaba en el **5 de junio**: 88 días.
-
-Si pides un rango completamente vacío, lo busca solo y te lo dice.
-
-### Dos datos que a veces vienen en blanco
-
-**El ciclo** (AM1, SD2…) lo traen algo más de la mitad de los pedidos: no
-todos los viajes lo llevan. El programa dice cuántos son al terminar,
-para que no se lea como dato perdido.
-
-**El nombre largo de la estación** existe para todas menos `SQR2`, cuya
-descripción en el panel es su propio código.
-
-### Un detalle del panel
-
-Las tarjetas de arriba muestran un total de 158 cuando en realidad hay
-162 pedidos. No es un error de extracción: **el total de MELI se olvida
-de los expirados**. Cada estado por separado sí cuadra exacto, y el
-programa cuenta los 162.
+Así que 450 casos son 15 consultas para el listado, en unos 6 segundos.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 

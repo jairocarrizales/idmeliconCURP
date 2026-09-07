@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QPlainTextEdit, QMessageBox, QComboBox, QCheckBox,
+    QPushButton, QPlainTextEdit, QMessageBox, QComboBox,
 )
 
 import extraer_pnr as nucleo
@@ -36,7 +36,7 @@ class Ordenes(QObject):
     """Las ordenes viajan por señal: si se llamara al metodo directamente,
     correria en el hilo de la ventana y la congelaria."""
     abrir = Signal()
-    extraer = Signal(str, bool, bool, bool)
+    extraer = Signal(str)
     cerrar = Signal()
 
 
@@ -61,8 +61,8 @@ class Trabajador(QObject):
         except Exception as e:
             self.p.fallo.emit(self._explicar(e))
 
-    @Slot(str, bool, bool, bool)
-    def extraer(self, periodo, con_extras, con_detalle, con_control):
+    @Slot(str)
+    def extraer(self, periodo):
         try:
             if not self.driver:
                 self.p.fallo.emit("Primero abre Chrome e inicia sesion.")
@@ -78,39 +78,15 @@ class Trabajador(QObject):
                     "Prueba con el periodo anterior.")
                 return
 
-            # Si solo se pidio el formato del control, ese es el unico
-            # archivo que interesa: escribir ademas el listado completo
-            # llenaria la carpeta de archivos que nadie abre.
-            solo_control = con_control and not con_extras
+            # La mitad de las 23 columnas solo estan en la ficha de cada
+            # caso, asi que siempre se abren.
+            self.log(f"Abriendo la ficha de cada uno de los "
+                     f"{len(self.registros)} casos...")
+            n = nucleo.completar_detalles(
+                self.driver, self.registros, avisar=self.log)
+            self.log(f"Detalles completos: {n}/{len(self.registros)}")
 
-            # Un unico sello para toda la extraccion: asi el listado
-            # con detalles pisa al de antes en vez de dejar dos archivos
-            # casi iguales, y el del control queda emparejado con el.
-            sello = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            csvf = None
-            if not solo_control:
-                # Se guarda ANTES de los detalles: si el segundo paso
-                # falla, no se pierde lo que ya costo traer.
-                self.log("Guardando el listado...")
-                csvf = nucleo.guardar(self.registros, periodo,
-                                      con_extras, sello=sello)
-
-            if con_detalle:
-                self.log(f"Abriendo la ficha de cada uno de los "
-                         f"{len(self.registros)} casos...")
-                n = nucleo.completar_detalles(
-                    self.driver, self.registros, avisar=self.log)
-                self.log(f"Detalles completos: {n}/{len(self.registros)}")
-                if not solo_control:
-                    csvf = nucleo.guardar(self.registros, periodo,
-                                          con_extras, con_detalle=True,
-                                          sello=sello)
-
-            if con_control:
-                csvf = nucleo.guardar_control(self.registros, periodo,
-                                              sello=sello)
-
+            csvf = nucleo.guardar_control(self.registros, periodo)
             self.log(f"Listo: {os.path.basename(csvf)}")
             self.p.terminado.emit("extraido", (self.registros, csvf))
 
@@ -230,44 +206,16 @@ class Ventana(QMainWindow):
             self.combo.addItem(nombre_periodo(p), p)
         fila.addWidget(self.combo)
 
-        self.chk_extras = QCheckBox("Con ruta y CEDIS")
-        self.chk_extras.setCursor(Qt.PointingHandCursor)
-        self.chk_extras.setToolTip(
-            "Ademas de los cuatro datos, agrega numero de caso, fecha,\n"
-            "estado, motivo, ruta y CEDIS. La API ya los manda.")
-        self.chk_extras.setStyleSheet(
-            f"QCheckBox {{ color: {SUAVE}; font-family: {FUENTE};"
-            f" font-size: 11px; }}"
-            f"QCheckBox::indicator {{ width: 14px; height: 14px;"
-            f" border: 1px solid {BORDE}; border-radius: 3px;"
-            f" background: {PANEL}; }}"
-            f"QCheckBox::indicator:checked {{ background: {AZUL};"
-            f" border-color: {AZUL}; }}")
-        fila.addWidget(self.chk_extras)
-
-        self.chk_detalle = QCheckBox("Abrir cada caso")
-        self.chk_detalle.setCursor(Qt.PointingHandCursor)
-        self.chk_detalle.setToolTip(
-            "Entra a la ficha de cada caso y trae lo que solo se ve ahi:\n"
-            "ID y telefono del conductor, productos con su precio, quien\n"
-            "recibio, la geo de la evidencia y el reclamante.\n\n"
-            "Tarda cerca de un minuto por cada 350 casos.")
-        self.chk_detalle.setStyleSheet(self.chk_extras.styleSheet())
-        fila.addWidget(self.chk_detalle)
-
-        self.chk_control = QCheckBox("Formato del control")
-        self.chk_control.setCursor(Qt.PointingHandCursor)
-        self.chk_control.setToolTip(
-            "Genera ademas el archivo con las doce columnas del control,\n"
-            "en su orden: FECHA DEL CASO, ID DE ENVIO, ESTACION...\n\n"
-            "Necesita 'Abrir cada caso' para llenarlas todas.")
-        self.chk_control.setStyleSheet(self.chk_extras.styleSheet())
-        # Ocho de las doce columnas del control salen de la ficha, asi que
-        # marcarlo sin 'Abrir cada caso' daria un archivo medio vacio.
-        self.chk_control.toggled.connect(self._al_marcar_control)
-        fila.addWidget(self.chk_control)
+        # Sin casillas: el programa hace siempre lo mismo, que es lo que
+        # se necesita. Antes habia tres y elegir mal daba un archivo
+        # distinto del que se esperaba.
         fila.addStretch()
         raiz.addLayout(fila)
+
+        nota = QLabel("Genera el CSV con las 23 columnas de la plataforma")
+        nota.setStyleSheet(f"color: {SUAVE}; font-family: {FUENTE};"
+                           f" font-size: 10px;")
+        raiz.addWidget(nota)
 
         # --- botones ---
         botones = QHBoxLayout()
@@ -312,12 +260,6 @@ class Ventana(QMainWindow):
         pie.addStretch()
         raiz.addLayout(pie)
 
-    def _al_marcar_control(self, marcado):
-        if marcado and not self.chk_detalle.isChecked():
-            self.chk_detalle.setChecked(True)
-            self.escribir("Se marco 'Abrir cada caso': el formato del "
-                          "control lo necesita para llenar sus columnas.")
-
     def _hilo(self):
         self.puente = Puente()
         self.ordenes = Ordenes()
@@ -348,10 +290,7 @@ class Ventana(QMainWindow):
         periodo = self.combo.currentData()
         self.b_extraer.setEnabled(False)
         self.paso.setText(f"Extrayendo los casos de {periodo}...")
-        self.ordenes.extraer.emit(periodo,
-                                  self.chk_extras.isChecked(),
-                                  self.chk_detalle.isChecked(),
-                                  self.chk_control.isChecked())
+        self.ordenes.extraer.emit(periodo)
 
     def al_carpeta(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(_carpeta_base()))
