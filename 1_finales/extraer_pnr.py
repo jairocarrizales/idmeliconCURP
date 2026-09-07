@@ -219,7 +219,9 @@ def normalizar(caso):
     sub = limpiar(estado.get("sub_status"))
     descripcion = SUB_ESTADOS.get(sub, sub) or ESTADOS.get(st, st)
 
-    fecha = limpiar(c.get("case.date_created"))
+    # La cruda se guarda tambien: el CSV del panel la lleva con hora
+    fecha_cruda = limpiar(c.get("case.date_created"))
+    fecha = fecha_cruda
     if len(fecha) >= 10:
         # 2026-08-24T20:33:01Z -> 24/08/2026
         fecha = f"{fecha[8:10]}/{fecha[5:7]}/{fecha[0:4]}"
@@ -241,6 +243,7 @@ def normalizar(caso):
         "id_ruta": limpiar(c.get("case.route_id")),
         "cedis": limpiar(c.get("case.svc_name")),
         "fecha": fecha,
+        "fecha_completa": fecha_cruda.replace("Z", ""),
     }
 
 
@@ -371,36 +374,117 @@ COLUMNAS_DETALLE = [
 # orden, que traia el CSV que la plataforma generaba antes de quitar el
 # boton de descarga.
 COLUMNAS_CONTROL = [
-    ("fecha", "FECHA DEL CASO"),
-    ("paquete", "ID DE ENVIO"),
-    ("cedis", "ESTACION DE ORIGEN"),
+    ("caso", "ID DEL CASO"),
+    ("fecha_iso", "FECHA DEL CASO"),
+    ("tipo_pnr", "TIPO DE PNR"),
     ("descripcion", "ESTADO"),
-    ("fecha_entrega", "FECHA DE ENTREGA"),
-    ("productos", "PRODUCTOS"),
-    ("valor_compra", "VALOR DE COMPRA"),
-    ("id_conductor", "ID DEL CONDUCTOR"),
-    # Mercado Libre no dice si el conductor es propio o de un tercero:
-    # la columna se escribe vacia para llenarla a mano, como en la hoja.
-    ("conductor_int_ext", "CONDUCTOR INT/EXT"),
-    ("fecha_revision", "FECHA PEDIDO DE REVISION"),
+    ("periodo_facturacion", "PERIODO DE FACTURACION"),
+    ("fecha_revision_iso", "FECHA PEDIDO DE REVISION"),
     ("pedido_revision", "PEDIDO DE REVISION"),
-    ("fecha_cierre", "FECHA DE CIERRE DE CASO"),
+    ("fecha_cierre_iso", "FECHA DE CIERRE DE CASO"),
+    ("rep_asistente", "REP - ASISTENTE"),
+    # Estas dos vienen vacias del panel: en el CSV original tampoco las
+    # traia casi ninguna fila. Se escriben para que el formato calce.
+    ("comentario_cierre", "COMENTARIO DE CIERRE"),
+    ("prefactura", "Nº DE PREFACTURA"),
+    ("paquete", "ID DE ENVIO"),
+    ("productos_csv", "PRODUCTOS"),
+    ("valor_compra_csv", "VALOR DE LA COMPRA"),
+    ("rep_transportadora", "REP TRANSPORTADORA"),
+    ("id_transportadora", "ID DE TRANSPORTADORA"),
+    ("transportadora", "TRANSPORTADORA"),
+    ("cedis", "ESTACION DE ORIGEN"),
+    ("id_ruta", "RUTA"),
+    ("id_conductor", "ID DEL CONDUCTOR"),
+    ("fecha_entrega_iso", "FECHA DE ENTREGA"),
+    ("id_reclamo", "ID DE RECLAMO"),
+    ("fecha_reclamo", "FECHA DEL RECLAMO"),
 ]
 
 
+def _a_iso(valor):
+    """'19/08/2026 18:13' -> '2026-08-19T18:13:41' (como el CSV original).
+
+    Si ya viene en ISO se deja igual; si es solo fecha, se completa con
+    las 00:00:00 para que el formato no cambie de una fila a otra.
+    """
+    t = limpiar(valor)
+    if not t:
+        return ""
+    if len(t) >= 10 and t[4] == "-" and t[7] == "-":
+        return t.replace(" ", "T")[:19]
+    if len(t) >= 10 and t[2] == "/" and t[5] == "/":
+        dia, mes, ano = t[0:2], t[3:5], t[6:10]
+        hora = t[11:19] if len(t) > 11 else ""
+        if len(hora) == 5:
+            hora += ":00"
+        return f"{ano}-{mes}-{dia}T{hora or '00:00:00'}"
+    return t
+
+
+def _fila_control(r, periodo):
+    """Un registro con los nombres y formatos del CSV original."""
+    monto = limpiar(r.get("valor_compra")) or limpiar(r.get("monto"))
+    if monto and not monto.startswith("$"):
+        monto = "$ " + monto
+    # El CSV original escribe los productos separados por coma y termina
+    # en coma; aqui llegan separados por '|' desde el detalle.
+    productos = limpiar(r.get("productos"))
+    if productos:
+        productos = productos.replace(" | ", ", ")
+        if not productos.endswith(","):
+            productos += ", "
+    return {
+        "caso": limpiar(r.get("caso")),
+        "fecha_iso": _a_iso(r.get("fecha_completa")
+                            or r.get("fecha")),
+        # En el CSV original todas las filas dicen lo mismo
+        "tipo_pnr": "Reclamo de PNR" if r.get("caso") else "",
+        "descripcion": limpiar(r.get("descripcion")),
+        # Solo lo llevan los casos ya facturados; el panel lo deja vacio
+        # en los abiertos, igual que el CSV original.
+        "periodo_facturacion": (periodo if limpiar(r.get("descripcion"))
+                                in ("Anulado", "Enviado a facturacion")
+                                else ""),
+        "fecha_revision_iso": _a_iso(r.get("fecha_revision")),
+        "pedido_revision": limpiar(r.get("pedido_revision")),
+        "fecha_cierre_iso": _a_iso(r.get("fecha_cierre")),
+        "rep_asistente": limpiar(r.get("rep_asistente")),
+        # Mercado Libre ya no expone estas dos: en el CSV original venian
+        # vacias en casi todas las filas.
+        "comentario_cierre": "",
+        "prefactura": limpiar(r.get("prefactura")),
+        "paquete": limpiar(r.get("paquete")),
+        "productos_csv": productos,
+        "valor_compra_csv": monto,
+        "rep_transportadora": limpiar(r.get("rep_transportadora")),
+        "id_transportadora": limpiar(r.get("id_transportadora")),
+        "transportadora": limpiar(r.get("transportadora")),
+        "cedis": limpiar(r.get("cedis")),
+        "id_ruta": limpiar(r.get("id_ruta")),
+        "id_conductor": limpiar(r.get("id_conductor")),
+        "fecha_entrega_iso": _a_iso(r.get("fecha_entrega")),
+        "id_reclamo": limpiar(r.get("id_reclamo")),
+        "fecha_reclamo": _a_iso(r.get("fecha_reclamo")),
+    }
+
+
 def guardar_control(registros, periodo, sello=None):
-    """El archivo con las columnas del control, en su orden.
+    """El archivo con las 23 columnas del CSV que daba la plataforma.
 
     A diferencia del otro formato, aqui NO se omiten las columnas vacias:
-    la hoja espera siempre las mismas doce, en el mismo sitio.
+    la hoja espera siempre las mismas, en el mismo sitio.
     """
     sello = sello or datetime.now().strftime("%Y%m%d_%H%M%S")
-    csvf = os.path.join(BASE_DIR, f"pnr_{periodo}_{sello}_control.csv")
-    with open(csvf, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f, delimiter=";")
+    # El nombre tambien como lo daba la plataforma: LOGISTICS_PNR - 202608Q2
+    csvf = os.path.join(BASE_DIR, f"LOGISTICS_PNR - {periodo}_{sello}.csv")
+    # Separador coma y sin BOM, igual que el original
+    with open(csvf, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
         w.writerow([t for _, t in COLUMNAS_CONTROL])
         for r in registros:
-            w.writerow([limpiar(r.get(k, "")) for k, _ in COLUMNAS_CONTROL])
+            fila = _fila_control(r, periodo)
+            w.writerow([fila.get(k, "") for k, _ in COLUMNAS_CONTROL])
     return csvf
 
 
@@ -655,6 +739,7 @@ def normalizar_detalle(det):
                 salida["nombre_ruta"] = detalle
         elif tipo == "CARRIER_ID":
             salida["transportadora"] = detalle or valor
+            salida["id_transportadora"] = valor
 
     # Las tarjetas: reclamo, quien recibio, ruta, evidencias
     for etiqueta, valor in _pares(det):
@@ -759,9 +844,15 @@ def _del_historial(det):
         if isinstance(nota, dict):
             t = limpiar(nota.get("message") or nota.get("text")
                         or nota.get("note") or nota.get("comment"))
-            autor = limpiar((nota.get("created_by") or {}).get("name")
-                            if isinstance(nota.get("created_by"), dict)
-                            else nota.get("created_by"))
+            creador = nota.get("created_by")
+            if isinstance(creador, dict):
+                autor = limpiar(creador.get("name"))
+                # Su user_id es el 'REP TRANSPORTADORA' del CSV original
+                uid = limpiar(creador.get("user_id"))
+                if uid and not salida.get("rep_transportadora"):
+                    salida["rep_transportadora"] = uid
+            else:
+                autor = limpiar(creador)
             if autor and autor not in quienes:
                 quienes.append(autor)
             adjuntos += len(nota.get("files") or [])

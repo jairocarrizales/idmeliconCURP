@@ -84,50 +84,54 @@ Dos columnas se omiten solas porque MELI las manda vacías: *Periodo de
 facturación* (el que vale es el que pediste) y *Voluminoso*. El programa
 solo escribe las columnas que tienen dato en al menos una fila.
 
-### `Formato del control` — las doce columnas de la hoja
+### `Formato del control` — el CSV que daba la plataforma
 
-La tercera casilla genera **un archivo aparte**, `..._control.csv`, con las
-mismas columnas y el mismo orden que traía el CSV que la plataforma
-generaba antes de quitar el botón de descarga:
-
-```
-FECHA DEL CASO | ID DE ENVIO | ESTACION DE ORIGEN | ESTADO |
-FECHA DE ENTREGA | PRODUCTOS | VALOR DE COMPRA | ID DEL CONDUCTOR |
-CONDUCTOR INT/EXT | FECHA PEDIDO DE REVISION | PEDIDO DE REVISION |
-FECHA DE CIERRE DE CASO
-```
-
-Marcarla enciende sola *Abrir cada caso*: ocho de las doce salen de la
-ficha. A diferencia del otro archivo, **aquí no se omite ninguna columna
-aunque venga vacía** — la hoja espera siempre las doce en su sitio.
-
-**Si marcas solo esta casilla, baja solo este archivo.** El listado
-completo no se escribe: sería un archivo que nadie abre.
-
-Medido contra 448 casos reales, **once de las doce se llenan solas**:
+La tercera casilla genera **un archivo aparte** con las mismas 23
+columnas, el mismo orden, el mismo nombre y el mismo formato que el CSV
+que la plataforma dejaba descargar antes de quitar el botón:
 
 ```
-FECHA DEL CASO             448/448      CONDUCTOR INT/EXT            0/448
-ID DE ENVIO                448/448      FECHA PEDIDO DE REVISION    82/448
-ESTACION DE ORIGEN         448/448      PEDIDO DE REVISION          82/448
-ESTADO                     448/448      FECHA DE CIERRE DE CASO    448/448
-FECHA DE ENTREGA           448/448
-PRODUCTOS                  448/448
-VALOR DE COMPRA            448/448
-ID DEL CONDUCTOR           448/448
+LOGISTICS_PNR - 202608Q2_<sello>.csv
 ```
 
-Las de revisión salen 82 porque solo 82 casos tuvieron una: los que sí,
-la traen completa con su texto ("Cliente recibe") y su fecha.
+```
+ID DEL CASO | FECHA DEL CASO | TIPO DE PNR | ESTADO |
+PERIODO DE FACTURACION | FECHA PEDIDO DE REVISION | PEDIDO DE REVISION |
+FECHA DE CIERRE DE CASO | REP - ASISTENTE | COMENTARIO DE CIERRE |
+Nº DE PREFACTURA | ID DE ENVIO | PRODUCTOS | VALOR DE LA COMPRA |
+REP TRANSPORTADORA | ID DE TRANSPORTADORA | TRANSPORTADORA |
+ESTACION DE ORIGEN | RUTA | ID DEL CONDUCTOR | FECHA DE ENTREGA |
+ID DE RECLAMO | FECHA DEL RECLAMO
+```
 
-`FECHA DE CIERRE` y `FECHA PEDIDO DE REVISION` salen del historial del
-caso (`events`), y `PEDIDO DE REVISION` de sus notas.
+Va con **separador coma y sin BOM**, y las fechas en ISO
+(`2026-08-19T18:13:41`), igual que el original — así entra en el mismo
+sitio donde entraba aquel.
 
-**`CONDUCTOR INT/EXT` sale vacía**: Mercado Libre no dice si el conductor
-es propio o de un tercero, así que esa se llena a mano.
+Medido contra 448 casos reales, **21 de las 23 se llenan**:
 
-De paso, el formato completo gana dos columnas que también estaban en el
-CSV viejo: **Rep - asistente** (quién escribió la nota) y **Adjuntos**.
+```
+ID DEL CASO                448/448     REP - ASISTENTE             82/448
+FECHA DEL CASO             448/448     COMENTARIO DE CIERRE         0/448
+TIPO DE PNR                448/448     Nº DE PREFACTURA            56/448
+ESTADO                     448/448     REP TRANSPORTADORA          82/448
+PERIODO DE FACTURACION     448/448     ID DE TRANSPORTADORA       448/448
+FECHA PEDIDO DE REVISION    82/448     TRANSPORTADORA             448/448
+PEDIDO DE REVISION          82/448     ESTACION DE ORIGEN         448/448
+FECHA DE CIERRE DE CASO    448/448     RUTA                       448/448
+ID DE ENVIO                448/448     ID DEL CONDUCTOR           448/448
+PRODUCTOS                  448/448     FECHA DE ENTREGA           448/448
+VALOR DE LA COMPRA         448/448     ID DE RECLAMO              448/448
+                                       FECHA DEL RECLAMO            0/448
+```
+
+Las de revisión salen 82 porque solo 82 casos tuvieron una. Las dos que
+salen en cero —*Comentario de cierre* y *Fecha del reclamo*— **también
+venían vacías en el CSV original**: la primera en todas sus filas, la
+segunda en todas menos dos de 2024.
+
+Marcarla enciende sola *Abrir cada caso*: la mitad de las columnas salen
+de la ficha. **Si marcas solo esta casilla, baja solo este archivo.**
 
 ### Por qué el detalle no usa una API
 

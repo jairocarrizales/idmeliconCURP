@@ -23,6 +23,7 @@ red_capacidad.json
 # Casos PNR: traen nombre del conductor, paquete y monto
 pnr_*.txt
 pnr_*.csv
+LOGISTICS_PNR*.csv
 red_pnr.json
 espia_salida.txt
 
