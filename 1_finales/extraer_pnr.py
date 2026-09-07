@@ -374,6 +374,10 @@ COLUMNAS_DETALLE = [
 # orden, que traia el CSV que la plataforma generaba antes de quitar el
 # boton de descarga.
 COLUMNAS_CONTROL = [
+    # Estas dos van primero aunque el CSV original no las traia: son las
+    # que se usan para cruzar con el padron y para leer de un vistazo.
+    ("id_conductor", "ID DEL DRIVER"),
+    ("nombre_driver", "NOMBRE DEL DRIVER"),
     ("caso", "ID DEL CASO"),
     ("fecha_iso", "FECHA DEL CASO"),
     ("tipo_pnr", "TIPO DE PNR"),
@@ -434,7 +438,12 @@ def _fila_control(r, periodo):
         productos = productos.replace(" | ", ", ")
         if not productos.endswith(","):
             productos += ", "
+    # El nombre viene por dos vias: la ficha del caso y el listado. Se
+    # prefiere el de la ficha, que es el que MELI muestra en el detalle.
+    nombre = limpiar(r.get("conductor")) or limpiar(r.get("driver"))
     return {
+        "id_conductor": limpiar(r.get("id_conductor")),
+        "nombre_driver": nombre,
         "caso": limpiar(r.get("caso")),
         "fecha_iso": _a_iso(r.get("fecha_completa")
                             or r.get("fecha")),

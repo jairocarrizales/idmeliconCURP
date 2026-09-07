@@ -53,6 +53,7 @@ LOGISTICS_PNR - 202608Q2_<sello>.csv
 ```
 
 ```
+ID DEL DRIVER | NOMBRE DEL DRIVER |
 ID DEL CASO | FECHA DEL CASO | TIPO DE PNR | ESTADO |
 PERIODO DE FACTURACION | FECHA PEDIDO DE REVISION | PEDIDO DE REVISION |
 FECHA DE CIERRE DE CASO | REP - ASISTENTE | COMENTARIO DE CIERRE |
@@ -62,15 +63,22 @@ ESTACION DE ORIGEN | RUTA | ID DEL CONDUCTOR | FECHA DE ENTREGA |
 ID DE RECLAMO | FECHA DEL RECLAMO
 ```
 
-Separador coma, sin BOM y fechas en ISO (`2026-08-19T18:13:41`), igual
-que el original: entra donde entraba aquel.
+Las dos primeras no venían en el original: se agregaron porque son las
+que se usan para cruzar con el padrón y para leer de un vistazo. De la
+tercera en adelante, todo calca al CSV de la plataforma —separador coma,
+sin BOM y fechas en ISO (`2026-08-19T18:13:41`)—.
 
 Tarda **unos 80 segundos** con 450 casos. La mayor parte se va abriendo
 la ficha de cada uno, porque la mitad de las columnas solo están ahí.
 
 ### Cuánto se llena
 
-Medido contra 448 casos reales, **21 de las 23**:
+Medido contra 448 casos reales, **23 de las 25**:
+
+```
+ID DEL DRIVER              448/448     NOMBRE DEL DRIVER          444/448
+```
+
 
 ```
 ID DEL CASO                448/448     REP - ASISTENTE             82/448
