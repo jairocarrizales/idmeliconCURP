@@ -36,7 +36,7 @@ class Ordenes(QObject):
     """Las ordenes viajan por señal: si se llamara al metodo directamente,
     correria en el hilo de la ventana y la congelaria."""
     abrir = Signal()
-    extraer = Signal(str, bool, bool)
+    extraer = Signal(str, bool, bool, bool)
     cerrar = Signal()
 
 
@@ -61,8 +61,8 @@ class Trabajador(QObject):
         except Exception as e:
             self.p.fallo.emit(self._explicar(e))
 
-    @Slot(str, bool, bool)
-    def extraer(self, periodo, con_extras, con_detalle):
+    @Slot(str, bool, bool, bool)
+    def extraer(self, periodo, con_extras, con_detalle, con_control):
         try:
             if not self.driver:
                 self.p.fallo.emit("Primero abre Chrome e inicia sesion.")
@@ -91,6 +91,10 @@ class Trabajador(QObject):
                 self.log(f"Detalles completos: {n}/{len(self.registros)}")
                 txt, csvf = nucleo.guardar(self.registros, periodo,
                                            con_extras, con_detalle=True)
+
+            if con_control:
+                ctrl = nucleo.guardar_control(self.registros, periodo)
+                self.log(f"Formato del control: {os.path.basename(ctrl)}")
 
             self.log(f"Listo: {os.path.basename(csvf)}")
             self.p.terminado.emit("extraido", (self.registros, txt, csvf))
@@ -235,6 +239,18 @@ class Ventana(QMainWindow):
             "Tarda cerca de un minuto por cada 350 casos.")
         self.chk_detalle.setStyleSheet(self.chk_extras.styleSheet())
         fila.addWidget(self.chk_detalle)
+
+        self.chk_control = QCheckBox("Formato del control")
+        self.chk_control.setCursor(Qt.PointingHandCursor)
+        self.chk_control.setToolTip(
+            "Genera ademas el archivo con las doce columnas del control,\n"
+            "en su orden: FECHA DEL CASO, ID DE ENVIO, ESTACION...\n\n"
+            "Necesita 'Abrir cada caso' para llenarlas todas.")
+        self.chk_control.setStyleSheet(self.chk_extras.styleSheet())
+        # Ocho de las doce columnas del control salen de la ficha, asi que
+        # marcarlo sin 'Abrir cada caso' daria un archivo medio vacio.
+        self.chk_control.toggled.connect(self._al_marcar_control)
+        fila.addWidget(self.chk_control)
         fila.addStretch()
         raiz.addLayout(fila)
 
@@ -281,6 +297,12 @@ class Ventana(QMainWindow):
         pie.addStretch()
         raiz.addLayout(pie)
 
+    def _al_marcar_control(self, marcado):
+        if marcado and not self.chk_detalle.isChecked():
+            self.chk_detalle.setChecked(True)
+            self.escribir("Se marco 'Abrir cada caso': el formato del "
+                          "control lo necesita para llenar sus columnas.")
+
     def _hilo(self):
         self.puente = Puente()
         self.ordenes = Ordenes()
@@ -313,7 +335,8 @@ class Ventana(QMainWindow):
         self.paso.setText(f"Extrayendo los casos de {periodo}...")
         self.ordenes.extraer.emit(periodo,
                                   self.chk_extras.isChecked(),
-                                  self.chk_detalle.isChecked())
+                                  self.chk_detalle.isChecked(),
+                                  self.chk_control.isChecked())
 
     def al_carpeta(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(_carpeta_base()))

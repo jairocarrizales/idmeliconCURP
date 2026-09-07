@@ -354,12 +354,54 @@ COLUMNAS_DETALLE = [
     ("geo_direccion", "Geo de la direccion"),
     ("distancia_geo", "Distancia entre geos"),
     ("evidencias", "Evidencias"),
+    ("fecha_revision", "Fecha pedido de revision"),
+    ("pedido_revision", "Pedido de revision"),
+    ("rep_asistente", "Rep - asistente"),
+    ("adjuntos", "Adjuntos"),
+    ("fecha_cierre", "Fecha de cierre del caso"),
     ("periodo_facturacion", "Periodo facturacion"),
     ("prefactura", "Prefactura"),
     ("id_comprador", "ID comprador"),
     ("id_reclamo", "ID reclamo"),
     ("voluminoso", "Voluminoso"),
 ]
+
+
+# El formato que se usa en el control: las mismas columnas, en el mismo
+# orden, que traia el CSV que la plataforma generaba antes de quitar el
+# boton de descarga.
+COLUMNAS_CONTROL = [
+    ("fecha", "FECHA DEL CASO"),
+    ("paquete", "ID DE ENVIO"),
+    ("cedis", "ESTACION DE ORIGEN"),
+    ("descripcion", "ESTADO"),
+    ("fecha_entrega", "FECHA DE ENTREGA"),
+    ("productos", "PRODUCTOS"),
+    ("valor_compra", "VALOR DE COMPRA"),
+    ("id_conductor", "ID DEL CONDUCTOR"),
+    # Mercado Libre no dice si el conductor es propio o de un tercero:
+    # la columna se escribe vacia para llenarla a mano, como en la hoja.
+    ("conductor_int_ext", "CONDUCTOR INT/EXT"),
+    ("fecha_revision", "FECHA PEDIDO DE REVISION"),
+    ("pedido_revision", "PEDIDO DE REVISION"),
+    ("fecha_cierre", "FECHA DE CIERRE DE CASO"),
+]
+
+
+def guardar_control(registros, periodo):
+    """El archivo con las columnas del control, en su orden.
+
+    A diferencia del otro formato, aqui NO se omiten las columnas vacias:
+    la hoja espera siempre las mismas doce, en el mismo sitio.
+    """
+    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csvf = os.path.join(BASE_DIR, f"pnr_{periodo}_{sello}_control.csv")
+    with open(csvf, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow([t for _, t in COLUMNAS_CONTROL])
+        for r in registros:
+            w.writerow([limpiar(r.get(k, "")) for k, _ in COLUMNAS_CONTROL])
+    return csvf
 
 
 def guardar(registros, periodo, con_extras=False, con_detalle=False):
@@ -665,6 +707,82 @@ def normalizar_detalle(det):
             salida["distancia_metros"] = str(geo.get("distance"))
         salida["evidencias"] = str(len(geo.get("evidences") or []))
 
+    salida.update(_del_historial(det))
+    return salida
+
+
+# Los eventos que marcan cada paso del caso. MELI los nombra asi.
+EVENTOS_CIERRE = ("UPDATE_STATUS_TO_CLOSED", "CLOSED", "CANCEL")
+EVENTOS_REVISION = ("REVIEW", "REVISION", "UPDATE_STATUS_TO_ON_REVIEW",
+                    "REQUEST_REVIEW", "ATTACHED_RECEIPT")
+
+
+def _fecha_hora(iso):
+    """2026-09-01T04:51:54Z -> 01/09/2026 04:51"""
+    t = limpiar(iso)
+    if len(t) >= 16 and "T" in t:
+        return f"{t[8:10]}/{t[5:7]}/{t[0:4]} {t[11:16]}"
+    return t
+
+
+def _del_historial(det):
+    """La fecha de cierre y el pedido de revision, de events y notes.
+
+    El CSV que la plataforma generaba traia estas columnas; el boton ya
+    no existe, asi que se arman desde el historial del propio caso.
+    """
+    salida = {}
+
+    nota_de_evento = []
+    for ev in det.get("_events") or []:
+        tipo = limpiar(ev.get("event_type")).upper()
+        cuando = _fecha_hora(ev.get("date_created"))
+        if not cuando:
+            continue
+        # Se queda el ultimo de cada clase: un caso puede reabrirse
+        if any(m in tipo for m in EVENTOS_CIERRE):
+            salida["fecha_cierre"] = cuando
+        elif any(m in tipo for m in EVENTOS_REVISION):
+            salida["fecha_revision"] = cuando
+        # Algunos eventos (ATTACHED_RECEIPT) llevan la nota dentro
+        n = ev.get("note")
+        if isinstance(n, dict):
+            m = limpiar(n.get("message") or n.get("text"))
+            if m:
+                nota_de_evento.append(m)
+
+    # Las notas son lo que se escribio al pedir la revision. El campo se
+    # llama 'message' (no 'text'), y trae quien la escribio y sus adjuntos.
+    textos, quienes, adjuntos = [], [], 0
+    for nota in det.get("_notes") or []:
+        if isinstance(nota, dict):
+            t = limpiar(nota.get("message") or nota.get("text")
+                        or nota.get("note") or nota.get("comment"))
+            autor = limpiar((nota.get("created_by") or {}).get("name")
+                            if isinstance(nota.get("created_by"), dict)
+                            else nota.get("created_by"))
+            if autor and autor not in quienes:
+                quienes.append(autor)
+            adjuntos += len(nota.get("files") or [])
+            if not salida.get("fecha_revision"):
+                cuando = _fecha_hora(nota.get("date_created")
+                                     or nota.get("dateCreated"))
+                if cuando:
+                    salida["fecha_revision"] = cuando
+        else:
+            t = limpiar(nota)
+        if t:
+            textos.append(t)
+    # Si notes viene vacio pero un evento traia la nota, sirve igual
+    if not textos and nota_de_evento:
+        textos = nota_de_evento
+    if textos:
+        salida["pedido_revision"] = " | ".join(textos)
+    if quienes:
+        salida["rep_asistente"] = " | ".join(quienes)
+    if adjuntos:
+        salida["adjuntos"] = str(adjuntos)
+
     return salida
 
 
@@ -672,35 +790,47 @@ SCRIPT_LOTE_HTML = """
 const base = arguments[0];
 const ids  = arguments[1];
 const done = arguments[arguments.length - 1];
+
+// Recorta el objeto o arreglo que sigue a "clave": contando llaves.
+// Respeta las que van dentro de un texto, o cortaria a mitad.
+function recortar(t, clave, abre, cierra) {
+  const marca = '"' + clave + '":';
+  const i = t.indexOf(marca);
+  if (i < 0) return null;
+  let ini = t.indexOf(abre, i + marca.length);
+  if (ini < 0) return null;
+  let prof = 0, enTexto = false, escapado = false;
+  for (let j = ini; j < t.length; j++) {
+    const c = t[j];
+    if (escapado) { escapado = false; continue; }
+    // La barra invertida se compara por su codigo (92): escribirla como
+    // literal obliga a escaparla dos veces (Python y JavaScript) y es
+    // facil dejarla mal, lo que rompe el script entero con
+    // 'Invalid or unexpected token'.
+    if (c.charCodeAt(0) === 92) { escapado = true; continue; }
+    if (c === '"') { enTexto = !enTexto; continue; }
+    if (enTexto) continue;
+    if (c === abre) prof++;
+    else if (c === cierra) { prof--; if (prof === 0) return t.substring(ini, j + 1); }
+  }
+  return null;
+}
+
 Promise.all(ids.map(id =>
   fetch(base + id, {credentials: 'include'})
     .then(r => r.ok ? r.text() : null)
     .then(t => {
       if (!t) return {id: id, ok: false, json: null};
       // Recortar en el navegador: devolver 3 MB de HTML por caso
-      // llenaria la memoria. Se busca el objeto caseDetail y se manda
-      // solo eso (unos 7 KB).
-      const marca = '"caseDetail":';
-      const i = t.indexOf(marca);
-      if (i < 0) { t = null; return {id: id, ok: false, json: null}; }
-      let ini = t.indexOf('{', i + marca.length);
-      let prof = 0, enTexto = false, escapado = false, fin = -1;
-      for (let j = ini; j < t.length; j++) {
-        const c = t[j];
-        if (escapado) { escapado = false; continue; }
-        // La barra invertida se compara por su codigo (92):
-        // escribirla como literal obliga a escaparla dos veces
-        // (Python y JavaScript) y es facil dejarla mal, lo que
-        // rompe el script entero con 'Invalid or unexpected token'.
-        if (c.charCodeAt(0) === 92) { escapado = true; continue; }
-        if (c === '"') { enTexto = !enTexto; continue; }
-        if (enTexto) continue;
-        if (c === '{') prof++;
-        else if (c === '}') { prof--; if (prof === 0) { fin = j + 1; break; } }
-      }
-      const trozo = fin > 0 ? t.substring(ini, fin) : null;
+      // llenaria la memoria. Se manda solo lo que se usa (~7 KB).
+      const ficha  = recortar(t, 'caseDetail', '{', '}');
+      // events y notes viven FUERA de caseDetail: traen el historial
+      // (creacion, revision, cierre) y el texto del pedido de revision.
+      const evs    = recortar(t, 'events', '[', ']');
+      const notas  = recortar(t, 'notes', '[', ']');
       t = null;
-      return {id: id, ok: !!trozo, json: trozo};
+      return {id: id, ok: !!ficha, json: ficha,
+              events: evs, notes: notas};
     })
     .catch(() => ({id: id, ok: false, json: null}))
 )).then(done);
@@ -723,9 +853,19 @@ def pedir_lote_detalles(driver, ids):
         if not r or not r.get("ok") or not r.get("json"):
             continue
         try:
-            salida[str(r.get("id"))] = json.loads(r["json"])
+            ficha = json.loads(r["json"])
         except ValueError:
             continue
+        # events y notes se guardan dentro de la ficha, con un nombre que
+        # no pisa nada de MELI, para que normalizar_detalle los vea.
+        for clave, campo in (("events", "_events"), ("notes", "_notes")):
+            crudo = r.get(clave)
+            if crudo:
+                try:
+                    ficha[campo] = json.loads(crudo)
+                except ValueError:
+                    pass
+        salida[str(r.get("id"))] = ficha
     return salida
 
 

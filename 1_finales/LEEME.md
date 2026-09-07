@@ -84,6 +84,48 @@ Dos columnas se omiten solas porque MELI las manda vacías: *Periodo de
 facturación* (el que vale es el que pediste) y *Voluminoso*. El programa
 solo escribe las columnas que tienen dato en al menos una fila.
 
+### `Formato del control` — las doce columnas de la hoja
+
+La tercera casilla genera **un archivo aparte**, `..._control.csv`, con las
+mismas columnas y el mismo orden que traía el CSV que la plataforma
+generaba antes de quitar el botón de descarga:
+
+```
+FECHA DEL CASO | ID DE ENVIO | ESTACION DE ORIGEN | ESTADO |
+FECHA DE ENTREGA | PRODUCTOS | VALOR DE COMPRA | ID DEL CONDUCTOR |
+CONDUCTOR INT/EXT | FECHA PEDIDO DE REVISION | PEDIDO DE REVISION |
+FECHA DE CIERRE DE CASO
+```
+
+Marcarla enciende sola *Abrir cada caso*: ocho de las doce salen de la
+ficha. A diferencia del otro archivo, **aquí no se omite ninguna columna
+aunque venga vacía** — la hoja espera siempre las doce en su sitio.
+
+Medido contra 448 casos reales, **once de las doce se llenan solas**:
+
+```
+FECHA DEL CASO             448/448      CONDUCTOR INT/EXT            0/448
+ID DE ENVIO                448/448      FECHA PEDIDO DE REVISION    82/448
+ESTACION DE ORIGEN         448/448      PEDIDO DE REVISION          82/448
+ESTADO                     448/448      FECHA DE CIERRE DE CASO    448/448
+FECHA DE ENTREGA           448/448
+PRODUCTOS                  448/448
+VALOR DE COMPRA            448/448
+ID DEL CONDUCTOR           448/448
+```
+
+Las de revisión salen 82 porque solo 82 casos tuvieron una: los que sí,
+la traen completa con su texto ("Cliente recibe") y su fecha.
+
+`FECHA DE CIERRE` y `FECHA PEDIDO DE REVISION` salen del historial del
+caso (`events`), y `PEDIDO DE REVISION` de sus notas.
+
+**`CONDUCTOR INT/EXT` sale vacía**: Mercado Libre no dice si el conductor
+es propio o de un tercero, así que esa se llena a mano.
+
+De paso, el formato completo gana dos columnas que también estaban en el
+CSV viejo: **Rep - asistente** (quién escribió la nota) y **Adjuntos**.
+
 ### Por qué el detalle no usa una API
 
 La ficha del caso **no pide datos a ninguna API**: la página
