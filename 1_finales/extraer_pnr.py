@@ -289,6 +289,7 @@ def extraer_todo(driver, periodo=None, avisar=None):
     preparar_pagina(driver)
 
     registros, vistos = [], set()
+    otros_tipos = {}
     pagina, total_paginas, total = 1, None, None
 
     while pagina <= MAX_PAGINAS:
@@ -311,6 +312,14 @@ def extraer_todo(driver, periodo=None, avisar=None):
             if reg["caso"] and reg["caso"] in vistos:
                 continue
             vistos.add(reg["caso"])
+            # Solo los reclamos de paquete no recibido. La bandeja tambien
+            # trae casos de direccion erronea (BAD_ADDRESS), que no llevan
+            # envio, productos ni valor: su ficha no tiene ese bloque. Si
+            # se cuelan, esas columnas salen vacias sin explicacion.
+            if reg["motivo"] and reg["motivo"] != "PNR_CLAIM":
+                otros_tipos[reg["motivo"]] = otros_tipos.get(
+                    reg["motivo"], 0) + 1
+                continue
             registros.append(reg)
             nuevos += 1
 
@@ -326,18 +335,15 @@ def extraer_todo(driver, periodo=None, avisar=None):
         pagina += 1
         time.sleep(PAUSA)
 
-    if total and len(registros) != total:
-        log(f"AVISO: se esperaban {total} casos y llegaron {len(registros)}.")
+    if otros_tipos:
+        detalle = ", ".join(f"{n} {k}" for k, n in
+                            sorted(otros_tipos.items(), key=lambda x: -x[1]))
+        log(f"Se omitieron {sum(otros_tipos.values())} casos que no son "
+            f"reclamos PNR: {detalle}.")
 
-    # Si MELI agrega un estado nuevo, saldria en ingles y con guiones bajos.
-    # Mejor decirlo que dejarlo pasar: el diccionario se completa en un
-    # minuto, pero solo si alguien se entera.
-    crudos = sorted({r["descripcion"] for r in registros
-                     if r["descripcion"] and r["descripcion"].isupper()
-                     and "_" in r["descripcion"]})
-    if crudos:
-        log(f"AVISO: estados sin traducir ({', '.join(crudos)}). "
-            "Salen tal cual los manda Mercado Libre.")
+    if total and len(registros) + sum(otros_tipos.values()) != total:
+        log(f"AVISO: se esperaban {total} casos y llegaron "
+            f"{len(registros) + sum(otros_tipos.values())}.")
 
     sin_driver = sum(1 for r in registros if not r["driver"])
     if sin_driver:
