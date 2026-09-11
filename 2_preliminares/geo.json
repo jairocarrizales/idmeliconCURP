@@ -1,0 +1,17 @@
+{
+  "ficha_ruta": {
+    "url": "https://envios.adminml.com/logistics/monitoring-distribution/detail/155197401",
+    "geo": {
+      "latitud": 370,
+      "longitud": 370,
+      "stops": 1,
+      "address": 232
+    },
+    "mapa": {
+      "canvas": 0,
+      "google": false,
+      "leaflet": true,
+      "mapbox": false
+    }
+  }
+}

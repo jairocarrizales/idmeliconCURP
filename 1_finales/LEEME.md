@@ -1,6 +1,6 @@
 # Los programas que se usan
 
-Estos cinco son los definitivos. Todo lo demás en el repo es el camino que
+Estos seis son los definitivos. Todo lo demás en el repo es el camino que
 llevó hasta ellos.
 
 | Programa | Qué hace | Tiempo |
@@ -10,6 +10,7 @@ llevó hasta ellos.
 | **`RutasMeli.exe`** | Rutas diarias para el control, con calendarios | ~30 s |
 | **`CasosPNR.exe`** | Reclamos PNR del período: driver, paquete, monto | ~10 s |
 | **`CapacidadMeli.exe`** | Pedidos de vehículos por estación y tipo | ~1 s/día |
+| **`MapasMeli.exe`** | Paradas de cada ruta con sus coordenadas | ~1 min/día |
 
 ## `DriversMeli.exe` — el padrón
 
@@ -130,6 +131,55 @@ lo que cruza con el padrón de `DriversMeli.exe` sin depender del nombre
 
 La API acepta **30 casos por página y ni uno más** — con 50 responde 400.
 Así que 450 casos son 15 consultas para el listado, en unos 6 segundos.
+
+## `MapasMeli.exe` — las paradas en el mapa
+
+Cada ruta del monitoreo tiene su ficha, con un mapa de las paradas
+numeradas. **El mapa no se puede descargar**: lo dibuja Leaflet en el
+navegador. Lo que sí están son los datos con los que lo dibuja.
+
+Se ejecuta con el día como argumento, o sin nada para tomar el de ayer:
+
+```
+MapasMeli.exe 2026-09-09
+```
+
+Salida: **dos archivos**.
+
+El CSV, una fila por parada:
+
+```
+FECHA | CEDIS | RUTA | ID RUTA | DRIVER | SECUENCIA | DIRECCION |
+LATITUD | LONGITUD | ESTADO | PAQUETES | ENVIOS | SACAS |
+TIPO DOMICILIO | PRECISION GEO | FUERA DE RANGO | ID PARADA
+```
+
+Y el KML, que se abre en Google Earth o se sube a
+[google.com/mymaps](https://google.com/mymaps): un pin por parada,
+numerado en orden de visita, agrupado por ruta y coloreado por estado
+—verde exitosa, rojo fallida, gris pendiente—.
+
+Medido sobre un día real: **14.238 paradas de 168 rutas en 55 segundos**,
+las 14.238 con coordenadas.
+
+### Las columnas que salen a medias
+
+`RUTA` y `SECUENCIA` se llenan en unas 9.800 de las 14.238 filas. No es
+un hueco del programa: son **52 rutas ya cerradas**, y Mercado Libre deja
+de publicar el nombre y el orden de visita cuando la ruta termina. Se
+nota al comparar sus estados —98% de paradas exitosas, contra 92% en las
+demás—.
+
+En el KML esas paradas van al final de su ruta, con la dirección como
+nombre en vez de un número inventado.
+
+### Por qué no agota la memoria de Chrome
+
+Cada ficha pesa **2,7 MB**. Traer las 168 enteras a Python son 450 MB y
+Chrome muere —ya pasó con el extractor de rutas—. El programa recorta el
+bloque de paradas **dentro del navegador** y solo cruzan unos 280 KB por
+ficha. Además recarga en blanco cada 60 fichas para que suelte lo
+acumulado.
 
 ## `PrefacturasMeli.exe` — facturación con ID
 

@@ -1,0 +1,47 @@
+{
+  "Monitoreo de distribucion": {
+    "mapa": {
+      "canvas": 0,
+      "contenedores": [],
+      "googleMaps": false,
+      "leaflet": false,
+      "mapbox": false
+    },
+    "apis": [
+      "https://envios.adminml.com/logistics/api/monitoring/get-routes-list",
+      "https://envios.adminml.com/logistics/api/monitoring/get-routes-metrics-summaries",
+      "https://envios.adminml.com/logistics/api/monitoring/get-routes-warnings-summaries",
+      "https://envios.adminml.com/logistics/first-mile/modules/__resolve_props?module=routehistory&consumer=shipping-logistics-frontend"
+    ]
+  },
+  "Pedidos de vehiculos": {
+    "mapa": {
+      "canvas": 0,
+      "contenedores": [],
+      "googleMaps": false,
+      "leaflet": false,
+      "mapbox": false
+    },
+    "apis": []
+  },
+  "Bandeja de soporte": {
+    "mapa": {
+      "canvas": 0,
+      "contenedores": [],
+      "googleMaps": false,
+      "leaflet": false,
+      "mapbox": false
+    },
+    "apis": []
+  },
+  "Conductores": {
+    "mapa": {
+      "canvas": 0,
+      "contenedores": [],
+      "googleMaps": false,
+      "leaflet": false,
+      "mapbox": false
+    },
+    "apis": []
+  }
+}

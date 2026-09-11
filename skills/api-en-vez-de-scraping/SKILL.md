@@ -329,6 +329,162 @@ rapido de lo que lo haria un humano usando el panel.
 
 ---
 
+## 10. Cuando los datos NO estan en ninguna API
+
+A veces no hay endpoint que encontrar: la pagina llega **armada desde el
+servidor**, con los datos ya dentro del HTML. Espiar la red no muestra
+nada porque no hay nada que pedir.
+
+Dos casos reales del mismo panel:
+
+| Pantalla | Donde estaban |
+|---|---|
+| Ficha de un caso PNR | `"caseDetail":{...}` dentro del HTML |
+| Ficha de una ruta | `"stops":[...]`, 116 paradas con coordenadas |
+
+**Como reconocerlo**: abres la pantalla, espias, y solo ves el HTML y
+archivos de configuracion. Antes de concluir que no se puede, busca en
+el HTML las palabras del dominio (`"stops"`, `"latitude"`, `"detail"`).
+
+**Como sacarlo**: recortar el objeto contando llaves, respetando las que
+van dentro de un texto.
+
+```javascript
+function recortar(t, clave, abre, cierra) {
+  const marca = '"' + clave + '":';
+  const i = t.indexOf(marca);
+  if (i < 0) return null;
+  let ini = t.indexOf(abre, i + marca.length);
+  let prof = 0, enTexto = false, escapado = false;
+  for (let j = ini; j < t.length; j++) {
+    const c = t[j];
+    if (escapado) { escapado = false; continue; }
+    // Por codigo (92), no como literal: escaparlo dos veces
+    // -Python y JavaScript- es facil de romper
+    if (c.charCodeAt(0) === 92) { escapado = true; continue; }
+    if (c === '"') { enTexto = !enTexto; continue; }
+    if (enTexto) continue;
+    if (c === abre) prof++;
+    else if (c === cierra) { prof--; if (prof === 0) return t.substring(ini, j + 1); }
+  }
+  return null;
+}
+```
+
+**Recortalo DENTRO del navegador.** Cada ficha pesaba 2.7 MB; traer 168
+enteras a Python son 450 MB y Chrome muere. Recortando cruzan 280 KB por
+ficha: 168 fichas y 14.238 paradas en 55 segundos, sin un fallo.
+
+---
+
+## 11. Leer la cabecera antes de escribir el codigo
+
+El error que mas tiempo costo, repetido tres veces seguidas: **suponer
+como se llama una columna o un parametro**.
+
+```python
+# Lo que supuse            # Lo que el XLSX traia de verdad
+"CEDIS_MELI"        ->     "Service center"
+"driver"            ->     "Nombre del transportista"
+"ID_Ruta"           ->     "Id de la ruta"
+```
+
+Resultado: dos columnas vacias en 14.238 filas, tres veces. Y con las
+APIs, parametros inventados que dieron 404 y 422.
+
+Peor todavia: una de esas columnas *parecia* funcionar. El conductor
+salia lleno, pero no venia del reporte sino de otra fuente; la busqueda
+devolvia NADA y nadie se entero. **Que una columna tenga datos no prueba
+que la estes leyendo de donde crees.**
+
+La regla: **vuelca la cabecera real antes de escribir el mapeo.**
+
+```python
+cab, filas = leer_xlsx(datos)
+for i, c in enumerate(cab):
+    print("%2d. %-34s %s" % (i, c, filas[0][i] if filas else ""))
+```
+
+Treinta segundos de diagnostico contra tres rondas de correcciones.
+
+---
+
+## 12. Detectar la sesion por lo que el panel PIDE
+
+Comprobar que "ya entro" mirando el tamano del HTML **no funciona**: la
+pagina de login tambien pesa 200 KB. Con esa comprobacion, un explorador
+recorrio cinco pantallas **tres veces seguidas** sin estar dentro, y
+reporto "no hay mapas" cuando en realidad no habia mirado.
+
+```python
+# Mal: el login tambien lo cumple
+if "adminml" in url and len(html) > 200000:
+    dentro = True
+
+# Bien: que el panel responda datos
+if "login" not in url and "/logistics" in url:
+    d.get_log("performance")
+    d.refresh()
+    time.sleep(6)
+    apis = [p for p in leer_red(d).values()
+            if "json" in (p.get("mime") or "")]
+    if len(apis) >= 2:
+        dentro = True
+```
+
+Una pantalla abierta dispara varias APIs para dibujarse; el login,
+ninguna. **Y si no hay sesion, detente** en vez de recorrer pantallas
+vacias: un resultado vacio se lee como "no existe" cuando significa "no
+llegue a mirar".
+
+Lo mismo al leer resultados: si una pantalla trae una sola peticion,
+dilo. Ese aviso fue lo que destapo que los "no hay mapas" eran falsos.
+
+---
+
+## 13. Que el `except` hable
+
+Un `except` mudo dio **357 ceros sin explicacion**: el script del lote se
+rompia entero por una barra invertida mal escapada, y el error se tragaba
+en silencio.
+
+```python
+# Mal
+except Exception:
+    fichas = {}
+
+# Bien: una vez por vuelta, no 60 veces
+except Exception as e:
+    if not fallo_dicho:
+        log(f"Fallo al pedir la ficha: {str(e)[:160]}")
+        fallo_dicho = True
+    if "out of memory" in str(e).lower():
+        _liberar_memoria(driver)
+    fichas = {}
+```
+
+Y **prueba el JavaScript de verdad**: los tests con datos falsos no lo
+ejecutan nunca. Compilalo en Chrome headless y compara su resultado con
+el de Python.
+
+---
+
+## 14. Los huecos que NO son tuyos
+
+Antes de "arreglar" una columna vacia, comprueba si el dato existe en
+origen. Tres casos reales:
+
+- **4.635 paradas sin numero de visita** (33%). No era un fallo: las 52
+  rutas ya cerradas no publican el orden. Se vio al comparar sus estados
+  (98% exitosas contra 92%).
+- **3 casos PNR sin conductor**: MELI manda `" "`, un espacio.
+- **`CONDUCTOR INT/EXT`**: no existe en ninguna fuente.
+
+Dejalos vacios y **di cuantos son al terminar**. Inventarlos es peor que
+el hueco, y un `1648/2025` sin explicacion se lee como perdida de datos.
+
+---
+
 ## Archivos de apoyo
 
 | Archivo | Para que |

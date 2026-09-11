@@ -20,6 +20,11 @@ capacidad_*.txt
 capacidad_*.csv
 red_capacidad.json
 
+# Paradas: traen direcciones de clientes con coordenadas exactas
+paradas_*.csv
+paradas_*.kml
+paradas.json
+
 # Casos PNR: traen nombre del conductor, paquete y monto
 pnr_*.txt
 pnr_*.csv
