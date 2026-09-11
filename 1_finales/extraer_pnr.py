@@ -603,10 +603,18 @@ def guardar(registros, periodo, con_extras=False, con_detalle=False,
 
 
 def resumen(registros):
-    """Cuenta por estado y suma los montos, para el reporte final."""
+    """Cuenta por estado y suma los montos, para el reporte final.
+
+    El conteo agrupa por 'estado' (el status del caso: CLOSED, NEW...),
+    que no es lo mismo que la columna ESTADO del CSV: esa usa el
+    sub_status. Por eso aqui salen nombres distintos a los del archivo.
+    """
     por_estado, suma, sin_monto = {}, 0.0, 0
     for r in registros:
-        e = r.get("estado") or "(sin estado)"
+        bruto = r.get("estado") or ""
+        # En español, igual que el CSV. Si MELI manda uno que no esta en
+        # el diccionario se deja su codigo: mejor en ingles que inventado.
+        e = ESTADOS.get(bruto) or bruto or "(sin estado)"
         por_estado[e] = por_estado.get(e, 0) + 1
         try:
             suma += float(r.get("monto") or 0)
