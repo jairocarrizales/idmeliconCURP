@@ -50,8 +50,11 @@ POR_PAGINA = 30
 PAUSA = 0.25
 MAX_PAGINAS = 200
 
-# Como se lee cada estado. La API los manda en ingles; la web los traduce
-# igual que aqui.
+# Los estados que manda la API. YA NO SE TRADUCEN: el CSV los escribe
+# tal cual para que sean estables y no salgan a medias en ingles cuando
+# MELI agrega uno nuevo (en septiembre aparecieron cuatro: RESOLVED,
+# EXPIRED, UNSOLVED y NOT_SUGGESTION). Se dejan como referencia de lo
+# que significa cada uno.
 ESTADOS = {
     "NEW": "Nuevo",
     "OPEN": "Revision en curso",
@@ -243,7 +246,10 @@ def normalizar(caso):
         estado = {}
     st = limpiar(estado.get("status"))
     sub = limpiar(estado.get("sub_status"))
-    descripcion = SUB_ESTADOS.get(sub, sub) or ESTADOS.get(st, st)
+    # Sin traducir: los valores salen como los manda MELI. Asi son
+    # estables aunque cambien el texto de la pantalla, y no aparecen
+    # a medias en ingles cuando agregan un estado nuevo.
+    descripcion = sub or st
 
     # La cruda se guarda tambien: el CSV del panel la lleva con hora.
     # Ambas pasan por a_hora_local: MELI las manda en UTC y sin convertir
@@ -266,9 +272,8 @@ def normalizar(caso):
         # Lo demas no se pidio, pero viene gratis en la misma respuesta
         "moneda": moneda,
         "caso": limpiar(caso.get("case_id") or c.get("case.id")),
-        "estado": ESTADOS.get(st, st),
-        "motivo": MOTIVOS.get(limpiar(c.get("case.type")),
-                              limpiar(c.get("case.type"))),
+        "estado": st,
+        "motivo": limpiar(c.get("case.type")),
         "ruta": limpiar(c.get("case.route_code")),
         "id_ruta": limpiar(c.get("case.route_id")),
         "cedis": limpiar(c.get("case.svc_name")),
@@ -404,10 +409,6 @@ COLUMNAS_DETALLE = [
 # orden, que traia el CSV que la plataforma generaba antes de quitar el
 # boton de descarga.
 COLUMNAS_CONTROL = [
-    # Estas dos van primero aunque el CSV original no las traia: son las
-    # que se usan para cruzar con el padron y para leer de un vistazo.
-    ("id_conductor", "ID DEL DRIVER"),
-    ("nombre_driver", "NOMBRE DEL DRIVER"),
     ("caso", "ID DEL CASO"),
     ("fecha_iso", "FECHA DEL CASO"),
     ("tipo_pnr", "TIPO DE PNR"),
@@ -483,13 +484,19 @@ def _fila_control(r, periodo):
         "caso": limpiar(r.get("caso")),
         "fecha_iso": _a_iso(r.get("fecha_completa")
                             or r.get("fecha")),
-        # En el CSV original todas las filas dicen lo mismo
-        "tipo_pnr": "Reclamo de PNR" if r.get("caso") else "",
+        # Sin traducir, como el resto: lo que manda la API en case.type
+        # (PNR_CLAIM). Antes iba escrito a mano en español y por eso
+        # quedaba fuera del cambio.
+        "tipo_pnr": limpiar(r.get("motivo")),
         "descripcion": limpiar(r.get("descripcion")),
         # Solo lo llevan los casos ya facturados; el panel lo deja vacio
-        # en los abiertos, igual que el CSV original.
+        # en los abiertos, igual que el CSV original. Se compara contra
+        # los codigos de MELI, no contra su traduccion: al dejar de
+        # traducir, la condicion en español no coincidia con nada y la
+        # columna salia vacia en todas las filas.
         "periodo_facturacion": (periodo if limpiar(r.get("descripcion"))
-                                in ("Anulado", "Enviado a facturacion")
+                                in ("NOT_BILLED", "BILLED",
+                                    "Anulado", "Enviado a facturacion")
                                 else ""),
         "fecha_revision_iso": _a_iso(r.get("fecha_revision")),
         "pedido_revision": limpiar(r.get("pedido_revision")),
