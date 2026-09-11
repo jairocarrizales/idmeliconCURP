@@ -21,7 +21,7 @@ import sys
 import csv
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -78,6 +78,32 @@ MOTIVOS = {
     "INVALID_POD": "Comprobante incorrecto o incompleto",
     "PNR_NOT_SPECIFIED": "Motivo no especificado",
 }
+
+
+# Mercado Libre entrega las fechas en UTC (terminadas en Z). Mexico va 6
+# horas atras, asi que un caso creado a las 20:37 del dia 10 llega como
+# 2026-09-11T02:37 y, sin convertir, aparece como del dia siguiente: una
+# fecha que todavia no ha llegado.
+HORAS_UTC_MEXICO = -6
+
+
+def a_hora_local(iso):
+    """'2026-09-11T02:37:11Z' -> datetime del 10 a las 20:37 en Mexico.
+
+    Devuelve None si no se puede leer, para que quien llame decida.
+    """
+    t = (iso or "").strip()
+    if len(t) < 19 or "T" not in t:
+        return None
+    try:
+        base = datetime.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    # Solo se corrige lo que viene marcado como UTC: si MELI dejara de
+    # poner la Z, restar 6 horas a ciegas seria peor que no tocar nada.
+    if t[19:20].upper() == "Z" or t.endswith("+00:00"):
+        return base + timedelta(hours=HORAS_UTC_MEXICO)
+    return base
 
 
 def log(msg):
@@ -219,8 +245,12 @@ def normalizar(caso):
     sub = limpiar(estado.get("sub_status"))
     descripcion = SUB_ESTADOS.get(sub, sub) or ESTADOS.get(st, st)
 
-    # La cruda se guarda tambien: el CSV del panel la lleva con hora
-    fecha_cruda = limpiar(c.get("case.date_created"))
+    # La cruda se guarda tambien: el CSV del panel la lleva con hora.
+    # Ambas pasan por a_hora_local: MELI las manda en UTC y sin convertir
+    # un caso de las 20:37 aparece como del dia siguiente.
+    crudo = limpiar(c.get("case.date_created"))
+    local = a_hora_local(crudo)
+    fecha_cruda = local.strftime("%Y-%m-%dT%H:%M:%S") if local else crudo
     fecha = fecha_cruda
     if len(fecha) >= 10:
         # 2026-08-24T20:33:01Z -> 24/08/2026
@@ -243,7 +273,7 @@ def normalizar(caso):
         "id_ruta": limpiar(c.get("case.route_id")),
         "cedis": limpiar(c.get("case.svc_name")),
         "fecha": fecha,
-        "fecha_completa": fecha_cruda.replace("Z", ""),
+        "fecha_completa": fecha_cruda,
     }
 
 
@@ -416,6 +446,12 @@ def _a_iso(valor):
     if not t:
         return ""
     if len(t) >= 10 and t[4] == "-" and t[7] == "-":
+        # Si viene marcada como UTC hay que pasarla a hora de Mexico:
+        # sin esto, un caso de las 20:37 sale con la fecha del dia
+        # siguiente, que es el fallo que se vio en el CSV.
+        local = a_hora_local(t.replace(" ", "T"))
+        if local:
+            return local.strftime("%Y-%m-%dT%H:%M:%S")
         return t.replace(" ", "T")[:19]
     if len(t) >= 10 and t[2] == "/" and t[5] == "/":
         dia, mes, ano = t[0:2], t[3:5], t[6:10]
@@ -816,6 +852,9 @@ def _fecha_hora(iso):
     """2026-09-01T04:51:54Z -> 01/09/2026 04:51"""
     t = limpiar(iso)
     if len(t) >= 16 and "T" in t:
+        local = a_hora_local(t)
+        if local:
+            return local.strftime("%d/%m/%Y %H:%M")
         return f"{t[8:10]}/{t[5:7]}/{t[0:4]} {t[11:16]}"
     return t
 

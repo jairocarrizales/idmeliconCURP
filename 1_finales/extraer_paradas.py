@@ -94,10 +94,18 @@ def rutas_del_dia(driver, dia):
     url = (f"{API_REPORTE}?mile=LM&init_date={dia}"
            f"&end_date={dia}&report_type=carrier")
     r = llamar(driver, url, binario=True)
-    if r.get("status") != 200 or not r.get("b64"):
+    # Dos fallos distintos con soluciones distintas: si el status no es
+    # 200 la sesion se cayo; si es 200 pero sin archivo, ese dia todavia
+    # no tiene reporte (de madrugada aun no existe el del dia en curso).
+    if r.get("status") != 200:
         raise RuntimeError(
             f"El reporte del {dia} respondio {r.get('status')}. "
             "Revisa que la sesion siga activa.")
+    if not r.get("b64"):
+        raise RuntimeError(
+            f"Mercado Libre todavia no publica el reporte del {dia}. "
+            "Si es el dia en curso, hay que esperar a que arranque la "
+            "operacion.")
     cab, filas = leer_xlsx(base64.b64decode(r["b64"]))
     if not cab:
         return []

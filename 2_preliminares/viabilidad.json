@@ -1,0 +1,46 @@
+{
+  "dias_historial": 400,
+  "desde": "2025-08-06",
+  "campos_tiempo": [],
+  "campos_parada": [
+    "address",
+    "addressTypeBusiness",
+    "addressTypeNotCategorized",
+    "addressTypeResidential",
+    "ambulance",
+    "claimsAmount",
+    "commercialAlerts",
+    "deliveredShipments",
+    "deliveryPreference",
+    "hasBags",
+    "hasPickupBuyer",
+    "hasPickupNode",
+    "hasShipments",
+    "id",
+    "notDeliveredShipments",
+    "orders",
+    "ordersAmount",
+    "outRangeDelivery",
+    "pendingShipments",
+    "pickedUpShipments",
+    "placesAmount",
+    "sequence",
+    "shipmentsAffectedAmount",
+    "status",
+    "stopAddress",
+    "stoppedShipments",
+    "tocTotalCases",
+    "transportUnitsAmount",
+    "type",
+    "zoneLabel"
+  ],
+  "ruta_hoy": {
+    "paradas": 109,
+    "estados": {
+      "complete": 85,
+      "pending": 21,
+      "incomplete": 3
+    },
+    "con_secuencia": 109
+  }
+}
