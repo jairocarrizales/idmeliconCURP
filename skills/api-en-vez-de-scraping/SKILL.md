@@ -485,6 +485,148 @@ el hueco, y un `1648/2025` sin explicacion se lee como perdida de datos.
 
 ---
 
+## 15. Comprobar el `status` antes de mirar el cuerpo
+
+Una URL inventada, `/monitoring/route/{id}`, devolvia **404** — pero el
+cuerpo del 404 pesaba **1.281 KB** de HTML de la aplicacion. El analisis
+corrio sobre esa pagina de error, no encontro ninguna hora y concluyo:
+"Mercado Libre no guarda las horas de entrega". **Falso, y dos corridas
+seguidas lo repitieron.** El dato estaba en la API que ya se usaba.
+
+```javascript
+// Mal: el cuerpo de un 404 tambien es texto, y puede pesar 1 MB
+fetch(url, {credentials:'include'}).then(r => r.text()).then(t => done(t));
+
+// Bien: que el status viaje junto al cuerpo
+fetch(url, {credentials:'include'})
+  .then(r => r.text().then(t => done({status: r.status, url: r.url, body: t})));
+```
+
+**La señal que lo delata: dos recursos distintos con el mismo tamaño
+exacto.** Dos rutas diferentes no pueden pesar 1281 KB las dos. Si el
+tamaño no varia con el identificador, no estas leyendo el recurso.
+
+Comprobaciones baratas antes de analizar nada:
+
+```python
+if r["status"] != 200:
+    log("HTTP %s en %s -> no se analiza" % (r["status"], r["url"]))
+    return None
+if id_pedido not in r["body"]:
+    log("El cuerpo no menciona %s: puede ser el cascaron" % id_pedido)
+```
+
+Y el corolario general: **cuando un resultado dice "no se puede",
+sospecha primero de la herramienta, no de la plataforma.** Un "no hay
+datos" es una afirmacion fuerte y exige mas prueba que un "si hay".
+
+---
+
+## 16. Agrupar por id, nunca por el nombre visible
+
+Ya esta dicho para cruzar dos fuentes (seccion 6), pero reaparece al
+**agrupar una sola**: un muestreo de 11 pasadas reporto una ruta con
+**193 muestras**. Las rutas ya cerradas llegan con el nombre vacio, asi
+que todas cayeron en la misma clave `("", "")`.
+
+```python
+# Mal: el nombre puede venir vacio, o repetirse
+por_ruta[(fila["CEDIS"], fila["RUTA"])].append(fila)
+
+# Bien: el id siempre viene
+por_ruta[fila["ID RUTA"]].append(fila)
+```
+
+El daño no fue un error visible sino un **conteo equivocado**: se
+reportaron 5 rutas con problema cuando eran 11. Cuatro quedaron
+escondidas dentro del grupo colapsado.
+
+Comprobacion de una linea que lo detecta al instante:
+
+```python
+assert max(len(v) for v in por.values()) <= n_muestras, "clave colapsada"
+```
+
+---
+
+## 17. La pantalla recorta; el archivo no
+
+Lo que se imprime en vivo esta pensado para caber en 80 columnas: nombres
+cortados, filas de mas omitidas. **No lo uses como fuente para
+conclusiones.** En un seguimiento real, cuatro rutas con alerta nunca
+aparecieron en la consola y si estaban en el CSV.
+
+Dos consecuencias practicas:
+
+- **Cuenta sobre el archivo, no sobre lo que mostraste.** Si el reporte
+  final sale de releer el CSV, los numeros cuadran con lo que el usuario
+  puede verificar por su cuenta.
+- **Si un resumen en vivo y el archivo no coinciden, gana el archivo** —
+  y hay que decirlo: "en pantalla fueron 5, en el archivo son 11".
+
+Vale tambien para los `regex` que leen tu propia salida: dependen del
+ancho de sangria y se rompen en silencio cuando un nombre es largo.
+Si vas a analizar resultados, analiza el **origen estructurado**.
+
+---
+
+## 18. Separar lo que se pierde de lo que se conserva
+
+Antes de montar un muestreo periodico, pregunta que guarda la plataforma
+por su cuenta. En un panel real la respuesta fue mixta y cambio el
+diseño entero:
+
+| Dato | Se conserva | Consecuencia |
+|---|---|---|
+| Hora de arranque, primer movimiento, cierre | Si, para cualquier dia pasado | No hace falta vigilar |
+| Tiempo en zona y en traslado | Si | Se extrae cuando se quiera |
+| Total entregado | Si | — |
+| **Hora de cada entrega** | **No** | Solo existe si se muestreo ese dia |
+
+Lo caro (dejar un equipo vigilando horas) se reserva para lo unico que
+de verdad se pierde. Todo lo demas se extrae despues, sin prisa.
+
+**Verifica el hallazgo con una cuenta que cierre.** Los sellos de
+arranque y cierre daban 333 minutos de diferencia, y el panel reportaba
+`orh: 333`. Esa coincidencia exacta prueba que la lectura es correcta,
+incluso con zonas horarias de por medio.
+
+---
+
+## 19. Muestrear: la reincidencia, no el evento suelto
+
+Si el panel ya trae alertas propias, **no te fies de una lectura**. En
+una jornada real, de **20 rutas marcadas, 9 se recuperaron solas** — 45%
+de falsas alarmas. Reaccionar a cada aviso gasta casi la mitad del
+esfuerzo en problemas que se resuelven sin intervencion.
+
+Lo que funciona es contar en cuantas muestras consecutivas persiste:
+
+```python
+alertas = defaultdict(list)
+for fila in filas:
+    if (fila["ALERTAS"] or "").strip():
+        alertas[fila["ID RUTA"]].append(fila["HORA"])
+
+ultima = max(f["HORA"] for f in filas)
+persistentes = {k: v for k, v in alertas.items() if v[-1] == ultima}
+falsas      = {k: v for k, v in alertas.items() if v[-1] != ultima}
+```
+
+Con tres muestras seguidas ya hay señal fiable. A 15 minutos por muestra,
+eso confirma un problema **45 minutos** despues de aparecer — a tiempo
+para reaccionar.
+
+Dos cosas mas que valen para cualquier muestreo:
+
+- **Guarda cada muestra en cuanto la tomas**, no al final. Si el proceso
+  se corta a la muestra 10 de 12, se pierde todo lo anterior.
+- **Perfil de navegador propio para el vigilante.** Cualquier script de
+  diagnostico que abra Chrome con el mismo perfil y haga `driver.quit()`
+  en su `finally` **le cierra la sesion al que esta vigilando**.
+
+---
+
 ## Archivos de apoyo
 
 | Archivo | Para que |

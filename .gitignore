@@ -68,3 +68,13 @@ resultados/
 # Prefacturas generadas en la carpeta de los programas
 1_finales/*.csv
 1_finales/descargas/
+
+# Vigilancia en vivo: nombres e ids de conductores, ruta por ruta
+ritmo_vivo_*.csv
+vivo_*.csv
+red_vivo.json
+
+# Perfiles de Chrome: contienen la sesion abierta del panel
+chrome_vigilante/
+chrome_espia/
+chrome_consulta*/

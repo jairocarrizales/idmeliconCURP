@@ -34,6 +34,72 @@ import extraer_paradas as pa
 
 BASE_DIR = os.path.join(PROY, "2_preliminares")
 
+# El vigilante usa SU PROPIO perfil de Chrome. Compartirlo con los demas
+# extractores le costo una corrida entera: cada uno cierra el navegador
+# al terminar, y al hacerlo mata la sesion del que sigue esperando.
+PERFIL_VIGILANTE = os.path.join(PROY, "2_preliminares", "chrome_vigilante")
+
+
+def preparar_perfil():
+    """Copia el perfil normal la primera vez, para heredar la sesion.
+
+    Asi no hay que volver a entrar: si ya iniciaste sesion en el perfil
+    de siempre, el vigilante arranca ya dentro.
+    """
+    if os.path.isdir(PERFIL_VIGILANTE):
+        return
+    # El perfil vive en extraer_rutas, no en extraer_paradas: este solo
+    # importa algunas funciones de aquel. Suponerlo costo un arranque.
+    from extraer_rutas import PROFILE_DIR
+    origen = PROFILE_DIR
+    if not os.path.isdir(origen):
+        return
+    import shutil
+    log("Creando el perfil del vigilante (copia del actual)...")
+    try:
+        shutil.copytree(origen, PERFIL_VIGILANTE,
+                        ignore=shutil.ignore_patterns(
+                            "Singleton*", "lockfile", "LOCK",
+                            "DevToolsActivePort", "*.tmp"))
+        log("Perfil listo.")
+    except Exception as e:
+        log("No se pudo copiar (%s); se usara uno nuevo." % str(e)[:80])
+
+
+def driver_propio():
+    """Chrome con el perfil del vigilante, no el compartido."""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    preparar_perfil()
+    # Un lock viejo deja a Chrome abriendo en blanco sin decir por que
+    for nombre in ("lockfile", "LOCK", "SingletonLock", "SingletonCookie",
+                   "SingletonSocket", "DevToolsActivePort"):
+        for carpeta in (PERFIL_VIGILANTE,
+                        os.path.join(PERFIL_VIGILANTE, "Default")):
+            ruta = os.path.join(carpeta, nombre)
+            try:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+            except Exception:
+                pass
+    o = Options()
+    o.add_argument("--user-data-dir=%s" % PERFIL_VIGILANTE)
+    o.add_argument("--profile-directory=Default")
+    o.add_argument("--start-maximized")
+    o.add_argument("--disable-blink-features=AutomationControlled")
+    o.add_argument("--lang=es-MX")
+    o.add_experimental_option("excludeSwitches", ["enable-automation"])
+    return webdriver.Chrome(options=o)
+
+
+def sesion_viva(d):
+    """La sesion sigue en pie? Sin lanzar excepcion."""
+    try:
+        _ = d.current_url
+        return True
+    except Exception:
+        return False
+
 HORA_INICIO = "09:00"      # a que hora empieza a vigilar
 MUESTRAS = 5               # cuantas tomas
 INTERVALO_MIN = 60         # cada cuanto
@@ -178,7 +244,7 @@ def main():
           % (hora, MUESTRAS, INTERVALO_MIN))
     print("=" * 68)
 
-    d = pa.crear_driver()
+    d = driver_propio()
     # Chrome NO se cierra al terminar: queda abierto para poder mirar el
     # panel, y porque cerrarlo a mitad de una vigilancia larga obligaria
     # a volver a entrar.
@@ -210,6 +276,24 @@ def main():
         arranco = False
         t0 = time.time()
         while time.time() - t0 < 6 * 3600:
+            # Si la sesion se cayo, reabrir en vez de rendirse: perder
+            # tres horas de espera por una desconexion de un segundo es
+            # lo que paso la primera vez.
+            if not sesion_viva(d):
+                log("Se perdio la sesion; reabriendo Chrome...")
+                try:
+                    d.quit()
+                except Exception:
+                    pass
+                try:
+                    d = driver_propio()
+                    d.get(pa.RAIZ + "/logistics/monitoring-distribution")
+                    time.sleep(8)
+                    log("Reabierto.")
+                except Exception as e:
+                    log("No se pudo reabrir: %s" % str(e)[:100])
+                    time.sleep(60)
+                    continue
             try:
                 rutas = pa.rutas_del_dia(d, dia)
                 if rutas:
@@ -221,6 +305,8 @@ def main():
             except RuntimeError as e:
                 if "todavia no publica" not in str(e):
                     raise
+            except Exception as e:
+                log("Fallo al consultar: %s" % str(e)[:90])
             time.sleep(REVISAR_CADA)
         if not arranco:
             log("Pasaron 6 horas sin rutas. Chrome queda abierto.")
@@ -230,6 +316,15 @@ def main():
 
         for n in range(MUESTRAS):
             log("Muestra %d de %d..." % (n + 1, MUESTRAS))
+            if not sesion_viva(d):
+                log("  sesion caida; reabriendo...")
+                try:
+                    d.quit()
+                except Exception:
+                    pass
+                d = driver_propio()
+                d.get(pa.RAIZ + "/logistics/monitoring-distribution")
+                time.sleep(8)
             actual, tardo = muestra(d, dia)
             tiempos.append(tardo)
             if not actual:
