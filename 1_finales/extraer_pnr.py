@@ -56,6 +56,14 @@ MAX_PAGINAS = 200
 # EXPIRED, UNSOLVED y NOT_SUGGESTION). Se dejan como referencia de lo
 # que significa cada uno.
 ESTADOS = {
+    # Los cuatro que manda MELI hoy, medidos sobre 3.776 casos de
+    # septiembre: RESOLVED 2.025, EXPIRED 1.166, UNSOLVED 544,
+    # NOT_SUGGESTION 41.
+    "RESOLVED": "Resuelto",
+    "EXPIRED": "Vencido",
+    "UNSOLVED": "Sin resolver",
+    "NOT_SUGGESTION": "Sin sugerencia",
+    # Los de antes, por si vuelven a aparecer
     "NEW": "Nuevo",
     "OPEN": "Revision en curso",
     "IN_PROGRESS": "Revision en curso",
@@ -246,10 +254,11 @@ def normalizar(caso):
         estado = {}
     st = limpiar(estado.get("status"))
     sub = limpiar(estado.get("sub_status"))
-    # Sin traducir: los valores salen como los manda MELI. Asi son
-    # estables aunque cambien el texto de la pantalla, y no aparecen
-    # a medias en ingles cuando agregan un estado nuevo.
-    descripcion = sub or st
+    # En español. Si MELI agrega un estado que no esta en los
+    # diccionarios se deja su codigo tal cual: es preferible una celda
+    # en ingles que una inventada, y al terminar se avisa cuales fueron.
+    bruto = sub or st
+    descripcion = SUB_ESTADOS.get(bruto) or ESTADOS.get(bruto) or bruto
 
     # La cruda se guarda tambien: el CSV del panel la lleva con hora.
     # Ambas pasan por a_hora_local: MELI las manda en UTC y sin convertir
@@ -340,6 +349,21 @@ def extraer_todo(driver, periodo=None, avisar=None):
                             sorted(otros_tipos.items(), key=lambda x: -x[1]))
         log(f"Se omitieron {sum(otros_tipos.values())} casos que no son "
             f"reclamos PNR: {detalle}.")
+
+    # Un estado que MELI agregue y no este en los diccionarios sale con
+    # su codigo en ingles. Es preferible a inventarlo, pero hay que
+    # decirlo: si no, aparece una celda en ingles entre miles y nadie
+    # sabe de donde salio.
+    sin_traducir = {}
+    for r in registros:
+        d = r.get("descripcion") or ""
+        if d and d == d.upper() and "_" in d:
+            sin_traducir[d] = sin_traducir.get(d, 0) + 1
+    if sin_traducir:
+        detalle = ", ".join(f"{n} {k}" for k, n in
+                            sorted(sin_traducir.items(), key=lambda x: -x[1]))
+        log(f"AVISO: estados que MELI manda y no estan traducidos, "
+            f"salen en ingles: {detalle}. Avisar para agregarlos.")
 
     if total and len(registros) + sum(otros_tipos.values()) != total:
         log(f"AVISO: se esperaban {total} casos y llegaron "
@@ -490,10 +514,10 @@ def _fila_control(r, periodo):
         "caso": limpiar(r.get("caso")),
         "fecha_iso": _a_iso(r.get("fecha_completa")
                             or r.get("fecha")),
-        # Sin traducir, como el resto: lo que manda la API en case.type
-        # (PNR_CLAIM). Antes iba escrito a mano en español y por eso
-        # quedaba fuera del cambio.
-        "tipo_pnr": limpiar(r.get("motivo")),
+        # En español: PNR_CLAIM -> "Reclamo PNR". Si MELI manda un tipo
+        # que no esta en MOTIVOS se deja su codigo, y se avisa al final.
+        "tipo_pnr": (MOTIVOS.get(limpiar(r.get("motivo")))
+                     or limpiar(r.get("motivo"))),
         "descripcion": limpiar(r.get("descripcion")),
         # Solo lo llevan los casos ya facturados; el panel lo deja vacio
         # en los abiertos, igual que el CSV original. Se compara contra
