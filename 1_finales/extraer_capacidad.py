@@ -40,9 +40,14 @@ else:
 
 PROFILE_DIR = os.path.join(BASE_DIR, "chrome_profile")
 
-# La API acepta 500 por pagina sin quejarse; un dia normal trae ~160, asi
-# que casi siempre basta una sola llamada.
-POR_PAGINA = 500
+# El tope real es 100: con 101 la API responde 422 "Invalid values in
+# query object". Antes aceptaba 500 y un dia entero cabia en una sola
+# llamada; Mercado Libre lo bajo despues del 2 de septiembre de 2026.
+# Medido por biseccion el 14 de septiembre: 100 pasa, 101 no.
+# Un dia normal trae ~160 pedidos, asi que AHORA SIEMPRE hacen falta
+# dos o mas paginas. La paginacion de extraer_dia() ya lo contempla
+# (lee pageInfo.numberOfPages), pero antes casi nunca se ejercitaba.
+POR_PAGINA = 100
 PAUSA = 0.25
 MAX_PAGINAS = 100
 
